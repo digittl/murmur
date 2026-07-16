@@ -6,7 +6,12 @@
 --
 -- Double-clicking the app (instead of dropping) prompts you to pick a folder.
 
-property gapSeconds : 2 -- seconds to wait between files; raise if the list still jumbles
+-- Seconds to wait between files. Whisper Transcription ingests the open events
+-- asynchronously, so if the next file arrives before it has finished registering
+-- the previous one, the two race and the list jumbles. This gap must be long
+-- enough for it to settle each file first. Raise it further if you still see
+-- jumbling on big batches.
+property gapSeconds : 8
 
 on run
 	set chosenFolder to choose folder with prompt "Choose the folder of recordings to import into Whisper Transcription in chronological order:"
