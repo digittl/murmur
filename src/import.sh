@@ -15,9 +15,9 @@ maxWait="${1:-600}"
 exportDir="${2:-$HOME/.whisper-extracts}"
 app="Whisper Transcription"
 exts=(m4a mp3 wav aac caf aiff flac ogg)
-pollInterval=0.25
-stabilitySleep=0.3 # gap between the two size reads that confirm a transcript is fully written
-settleSeconds=1 # absorb sibling files when MacWhisper exports multiple formats per transcript
+pollInterval=0.1
+stabilitySleep=0.15 # gap between the two size reads that confirm a transcript is fully written
+settleSeconds=0.5 # absorb sibling files when MacWhisper exports multiple formats per transcript
 
 # Collect dropped paths from stdin.
 typeset -a items
