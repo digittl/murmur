@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate assets/AppIcon.icns for BatchWhisper.
+"""Generate assets/AppIcon.icns for Murmur.
 
 A macOS-style rounded squircle with a diagonal indigo->violet gradient and a row
-of ascending, rounded audio bars — reading as both a waveform and the app's
-ascending (oldest-first) ordering. Rendered at 4x then downsampled for clean edges.
+of ascending, rounded audio bars — reading as both a voice waveform and the
+diary's forward march of days. Rendered at 4x then downsampled for clean edges.
 """
 
 import os

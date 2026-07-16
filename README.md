@@ -1,56 +1,93 @@
-# BatchWhisper
+# Murmur
 
-A small native macOS app that imports voice recordings into **Whisper
-Transcription.app** (MacWhisper) in **chronological order** — reliably, not by
-guessing at timing.
+**A spoken journal, transcribed on-device.**
 
-MacWhisper sorts its list by the order files were *added to it*, and it ingests
-drops asynchronously, so dragging a batch in at once lands them jumbled.
-BatchWhisper feeds them one at a time, oldest first, and **waits for each file's
-transcript to actually appear before sending the next** — so MacWhisper only ever
-holds one job and the order can't scramble.
+Murmur turns a folder of voice recordings into a diary. Point it at your
+recordings and it transcribes each one locally with Whisper, gives it an AI
+title and summary using Apple's on-device model, and lays the whole thing out as
+a calendar of days you can browse, play back, and edit — every word aligned to
+the audio. Nothing leaves your Mac; everything syncs through iCloud Drive.
 
-## Using it
+## What it does
 
-- Drop a **folder** of recordings (or the recordings themselves) onto the window —
-  or click **Choose Folder…**. You can also drag them onto the app/Dock icon.
-- Confirm the **export folder** matches MacWhisper's auto-export folder
-  (default `~/.whisper-extracts`).
-- Press **Start**. The progress bar and log track each file as its transcript lands.
+- **Import a folder** of recordings (or drag them onto the window). Files are
+  processed oldest-first so the diary fills in chronological order.
+- **Local transcription** with [WhisperKit](https://github.com/argmaxinc/WhisperKit)
+  (Core ML). Defaults to **large-v3** for best accuracy; switch models (distil,
+  small, base, tiny) from the toolbar. Models download once and stay cached.
+- **AI title + summary** for every entry via Apple's on-device Foundation Models
+  (Apple Intelligence) — fully local, no key, no network. Falls back to a
+  heuristic caption when Apple Intelligence is off.
+- **Diary layout**: a month calendar (days with entries are dotted), a
+  reverse-chronological feed grouped by day with Today / Yesterday headings, and
+  a reading pane per entry.
+- **Playback + timestamps**: play the recording, scrub, and tap any line's
+  timestamp to jump there. The current line highlights as it plays.
+- **Editable**: fix the title, rewrite the summary (or regenerate it), and
+  correct any word inline — edits autosave.
+- **Skips duplicates**: dedupe is by audio checksum, so re-importing the same
+  folder never doubles anything up.
 
-Files are sorted **ascending by filename** (`YYYY-MM-DD-HH-MM-SS`), which is
-chronological and immune to created-date being reset when copying off a USB.
-Supported: `m4a mp3 wav aac caf aiff flac ogg`.
+## Where your files live
 
-## One-time MacWhisper setup
+Murmur stores everything under your **iCloud Drive** so it syncs across your
+Macs automatically — no paid developer profile or entitlement required:
 
-BatchWhisper detects "this file is done" by watching MacWhisper's auto-export folder:
+```
+~/Library/Mobile Documents/com~apple~CloudDocs/Murmur/
+  audio/     copied recordings
+  entries/   one JSON per entry (transcript, title, summary, timings)
+```
 
-1. **Turn on auto-export** of transcripts, pointed at `~/.whisper-extracts`
-   (or set a different folder in the app's Export folder field).
-2. **Turn off any watched folders** — a watched folder auto-transcribes files in
-   async order and double-processes them. Feed files through BatchWhisper instead.
-3. Work from a **copy of the recordings** — not a folder MacWhisper is watching.
+If iCloud Drive isn't present it falls back to `~/Documents/Murmur/`. One entry
+per file means iCloud never has to merge a shared index.
+
+## Requirements
+
+- **macOS 26** (Tahoe) or later — for the Foundation Models framework.
+- **Apple Silicon** recommended (Whisper runs on the Neural Engine / GPU).
+- **Apple Intelligence** turned on (System Settings ▸ Apple Intelligence & Siri)
+  for AI titles and summaries. Without it, Murmur still transcribes and captions
+  using a built-in fallback.
 
 ## Build
 
-Needs the Xcode command line tools (`swiftc`):
+Needs Xcode 26 (Swift 6.2, macOS 26 SDK):
 
 ```sh
 zsh build.sh
 ```
 
-The app appears at `dist/BatchWhisper.app`. Drag it to `/Applications`.
+The app appears at `dist/Murmur.app`. Drag it to `/Applications`. First launch
+downloads the chosen Whisper model.
 
-## Tuning
+## An iPhone version?
 
-Timing constants live at the top of the batch engine in
-[`src/main.swift`](src/main.swift): `maxWaitPerFile` (per-file timeout, default
-600s), `pollInterval` (0.1s), `stabilityGap`, and `settle`.
+The whole core — model, storage, transcription (WhisperKit), and summarization
+(Foundation Models) — is UI-free Swift that also compiles for **iOS 26**, and the
+SwiftUI views are largely shared. The only real blocker is distribution: iOS apps
+can't be sideloaded, so an iPhone build needs the Apple Developer Program for
+TestFlight / the App Store, plus a proper iCloud-container entitlement (the
+generic iCloud-Drive-folder trick the Mac app uses is macOS-only). That's a
+follow-up target, not a rewrite.
 
 ## Layout
 
-- [`src/main.swift`](src/main.swift) — the whole app: UI, drop handling, and the feed-and-wait engine.
-- [`src/Info.plist`](src/Info.plist) — bundle metadata, icon, and accepted document types.
-- [`assets/make-icon.py`](assets/make-icon.py) — regenerates `assets/AppIcon.icns`.
-- [`build.sh`](build.sh) — compiles `src/main.swift` and assembles `dist/BatchWhisper.app`.
+- [`Sources/Murmur/Model/`](Sources/Murmur/Model/) — `Entry`, `Storage` (iCloud
+  path resolution), `Library` (load/save/dedupe). Platform-agnostic.
+- [`Sources/Murmur/Core/`](Sources/Murmur/Core/) — `Transcriber` (WhisperKit),
+  `Summarizer` (Foundation Models), `Importer` (the pipeline), `Player`.
+- [`Sources/Murmur/App/`](Sources/Murmur/App/) — the SwiftUI app: calendar,
+  diary feed, and the entry detail/editor.
+- [`assets/make-icon.py`](assets/make-icon.py) — regenerates `AppIcon.icns`.
+- [`build.sh`](build.sh) — compiles via SwiftPM and assembles `dist/Murmur.app`.
+
+## Verifying
+
+A headless smoke test exercises the whole pipeline (dedupe → transcribe →
+summarize → persist) with the fast `tiny` model against a throwaway library:
+
+```sh
+swift build -c release --product Murmur
+"$(swift build -c release --product Murmur --show-bin-path)/Murmur" --selftest /path/to/recordings
+```

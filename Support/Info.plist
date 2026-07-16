@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>BatchWhisper</string>
+	<string>Murmur</string>
 	<key>CFBundleDisplayName</key>
-	<string>BatchWhisper</string>
+	<string>Murmur</string>
 	<key>CFBundleIdentifier</key>
-	<string>co.digittl.batchwhisper</string>
+	<string>co.digittl.murmur</string>
 	<key>CFBundleExecutable</key>
-	<string>BatchWhisper</string>
+	<string>Murmur</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
@@ -21,11 +21,11 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
+	<string>26.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
