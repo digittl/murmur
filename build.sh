@@ -4,7 +4,7 @@
 
 set -e
 here="${0:A:h}"
-appName="Chronus"
+appName="BatchWhisper"
 out="$here/dist/$appName.app"
 
 rm -rf "$out"
