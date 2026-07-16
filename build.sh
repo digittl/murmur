@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Build "Whisper Chrono Import.app" from src/ into dist/.
-# Requires only macOS (osacompile ships with the OS).
+# Build "BatchWhisper.app" (native AppKit / Swift) from src/ into dist/.
+# Requires the Xcode command line tools (swiftc).
 
 set -e
 here="${0:A:h}"
@@ -8,19 +8,18 @@ appName="BatchWhisper"
 out="$here/dist/$appName.app"
 
 rm -rf "$out"
-mkdir -p "$here/dist"
+mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
 
-# Compile the AppleScript into a droplet .app (the `on open` handler makes it droppable).
-osacompile -o "$out" "$here/src/main.applescript"
+# Compile the Swift executable.
+swiftc -O -swift-version 5 -o "$out/Contents/MacOS/$appName" "$here/src/main.swift"
 
-# Bundle the shell worker so `path to resource "import.sh"` resolves at runtime.
-cp "$here/src/import.sh" "$out/Contents/Resources/import.sh"
-chmod +x "$out/Contents/Resources/import.sh"
-
-# Use our app icon. osacompile's default icon file is droplet.icns; overwrite it.
+# Bundle metadata + icon.
+cp "$here/src/Info.plist" "$out/Contents/Info.plist"
 if [[ -f "$here/assets/AppIcon.icns" ]]; then
-  cp "$here/assets/AppIcon.icns" "$out/Contents/Resources/droplet.icns"
-  touch "$out"
+  cp "$here/assets/AppIcon.icns" "$out/Contents/Resources/AppIcon.icns"
 fi
+
+# Ad-hoc code signature so Gatekeeper treats it as a normal unsigned local app.
+codesign --force --sign - "$out" >/dev/null 2>&1 || true
 
 echo "Built: $out"
