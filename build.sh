@@ -4,7 +4,7 @@
 
 set -e
 here="${0:A:h}"
-appName="Whisper Chrono Import"
+appName="Chronus"
 out="$here/dist/$appName.app"
 
 rm -rf "$out"

@@ -1,4 +1,4 @@
-# Whisper Chrono Import
+# Chronus
 
 A tiny macOS app that imports voice recordings into **Whisper Transcription.app** in
 **chronological order**.
@@ -29,7 +29,7 @@ Needs nothing but macOS (`osacompile` ships with the OS):
 zsh build.sh
 ```
 
-The app appears at `dist/Whisper Chrono Import.app`. Drag it to `/Applications`.
+The app appears at `dist/Chronus.app`. Drag it to `/Applications`.
 
 ## Tuning
 

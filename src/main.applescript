@@ -1,4 +1,4 @@
--- Whisper Chrono Import
+-- Chronus
 -- Drag a folder of recordings (or the recordings themselves) onto this app.
 -- It feeds each file into Whisper Transcription one at a time, in chronological
 -- order (by the YYYY-MM-DD-HH-MM-SS timestamp in each filename), so the app's
@@ -28,5 +28,5 @@ on handleItems(theItems)
 	set theOutput to do shell script "/bin/zsh " & quoted form of scriptPath & " " & (gapSeconds as text) & " <<'WCI_PATHS'
 " & posixPaths & "WCI_PATHS"
 
-	display notification theOutput with title "Whisper Chrono Import"
+	display notification theOutput with title "Chronus"
 end handleItems
