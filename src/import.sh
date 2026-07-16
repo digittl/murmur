@@ -15,8 +15,9 @@ maxWait="${1:-600}"
 exportDir="${2:-$HOME/.whisper-extracts}"
 app="Whisper Transcription"
 exts=(m4a mp3 wav aac caf aiff flac ogg)
-pollInterval=1
-settleSeconds=2 # absorb sibling files when MacWhisper exports multiple formats per transcript
+pollInterval=0.25
+stabilitySleep=0.3 # gap between the two size reads that confirm a transcript is fully written
+settleSeconds=1 # absorb sibling files when MacWhisper exports multiple formats per transcript
 
 # Collect dropped paths from stdin.
 typeset -a items
@@ -44,7 +45,8 @@ if (( ${#files} == 0 )); then
   exit 0
 fi
 
-# Sort by basename — filenames are YYYY-MM-DD-HH-MM-SS, so lexical == chronological.
+# Sort ascending by basename (oldest first) — filenames are YYYY-MM-DD-HH-MM-SS,
+# so a plain ascending lexical sort is chronological, oldest → newest.
 files=(${(f)"$(printf '%s\n' $files | awk -F/ '{print $NF"\t"$0}' | sort | cut -f2-)"})
 
 mkdir -p "$exportDir"
@@ -71,8 +73,8 @@ for f in $files; do
     for x in "$exportDir"/*(N.); do
       if [[ -z "${before[$x]}" ]]; then
         s1=$(stat -f%z "$x" 2>/dev/null || echo 0)
-        sleep 1
-        (( waited += 1 ))
+        sleep $stabilitySleep
+        (( waited += stabilitySleep ))
         s2=$(stat -f%z "$x" 2>/dev/null || echo 0)
         if (( s1 > 0 && s1 == s2 )); then
           found=1

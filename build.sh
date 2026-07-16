@@ -17,4 +17,10 @@ osacompile -o "$out" "$here/src/main.applescript"
 cp "$here/src/import.sh" "$out/Contents/Resources/import.sh"
 chmod +x "$out/Contents/Resources/import.sh"
 
+# Use our app icon. osacompile's default icon file is droplet.icns; overwrite it.
+if [[ -f "$here/assets/AppIcon.icns" ]]; then
+  cp "$here/assets/AppIcon.icns" "$out/Contents/Resources/droplet.icns"
+  touch "$out"
+fi
+
 echo "Built: $out"

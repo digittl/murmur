@@ -59,4 +59,5 @@ Rebuild with `zsh build.sh` after changing either.
 
 - [`src/main.applescript`](src/main.applescript) — the droplet: handles drops / the folder picker, calls the worker.
 - [`src/import.sh`](src/import.sh) — expands folders, sorts chronologically, feeds each file and waits for its transcript.
-- [`build.sh`](build.sh) — compiles `src/` into `dist/BatchWhisper.app`.
+- [`build.sh`](build.sh) — compiles `src/` into `dist/BatchWhisper.app` and applies the icon.
+- [`assets/make-icon.py`](assets/make-icon.py) — regenerates `assets/AppIcon.icns` (run it if you tweak the icon).
