@@ -3,19 +3,23 @@ import SwiftUI
 import AppKit
 #endif
 
-/// The reading/editing surface for one diary entry: editable title and summary,
-/// a playback bar, and the transcript as timestamped, editable segments that
-/// highlight and scrub in time with the audio. Edits autosave to the library.
+/// The reading surface for one diary entry. Title and summary are AI-generated
+/// and read-only (change them via Regenerate); the transcript shows as flowing,
+/// editable prose. Playback scrubs the recording. Edits autosave.
 struct EntryDetailView: View {
     let entry: Entry
 
     @EnvironmentObject private var library: Library
     @EnvironmentObject private var player: Player
-    @EnvironmentObject private var summarizer: Summarizer
+    @EnvironmentObject private var ollama: OllamaService
+    @EnvironmentObject private var settings: AppSettings
+    @Environment(\.dismiss) private var dismiss
 
     @State private var draft: Entry
     @State private var saveTask: Task<Void, Never>?
-    @State private var isRegenerating = false
+    @State private var regenerating: Field?
+
+    private enum Field { case title, summary }
 
     init(entry: Entry) {
         self.entry = entry
@@ -25,76 +29,75 @@ struct EntryDetailView: View {
     private var audioURL: URL { library.audioURL(for: draft) }
     private var isCurrentAudio: Bool { player.loadedURL == audioURL }
 
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    titleField
-                    metadataRow
-                    summaryBlock
-                    playbackBar
-                    Divider()
-                    transcript(scrollProxy: proxy)
-                }
-                .padding(28)
-                .frame(maxWidth: 780, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private var proseBinding: Binding<String> {
+        Binding(
+            get: { draft.prose },
+            set: {
+                draft.text = $0
+                draft.transcriptEdited = true
+                scheduleSave()
             }
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                header
+                summaryBlock
+                playbackBar
+                Divider()
+                transcriptBlock
+            }
+            .padding(28)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .onChange(of: player.currentTime) { _, _ in autoScroll() }
+        .navigationTitle(draft.title.isEmpty ? "Entry" : draft.title)
         .onAppear { player.load(audioURL) }
         .toolbar { detailToolbar }
     }
 
-    // MARK: - Header
+    // MARK: - Header (read-only title + metadata)
 
-    private var titleField: some View {
-        TextField("Title", text: $draft.title)
-            .textFieldStyle(.plain)
-            .font(.system(size: 30, weight: .bold))
-            .onChange(of: draft.title) { _, _ in scheduleSave() }
-    }
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(draft.title.isEmpty ? "Untitled" : draft.title)
+                .font(.system(size: 30, weight: .bold))
+                .textSelection(.enabled)
+                .overlay(alignment: .trailing) {
+                    if regenerating == .title { ProgressView().controlSize(.small) }
+                }
 
-    private var metadataRow: some View {
-        HStack(spacing: 14) {
-            Label(draft.date.formatted(.dateTime.weekday().day().month().hour().minute()), systemImage: "calendar")
-            Label(Format.clock(draft.duration), systemImage: "waveform")
-            if let language = draft.language {
-                Label(language.uppercased(), systemImage: "globe")
+            HStack(spacing: 14) {
+                Label(draft.date.formatted(.dateTime.weekday().day().month().hour().minute()), systemImage: "calendar")
+                Label(Format.clock(draft.duration), systemImage: "waveform")
+                if let language = draft.language {
+                    Label(language.uppercased(), systemImage: "globe")
+                }
+                Label(draft.model, systemImage: "cpu")
             }
-            Label(draft.model, systemImage: "cpu")
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
+
+    // MARK: - Summary (read-only)
 
     private var summaryBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Summary")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    regenerate()
-                } label: {
-                    Label("Regenerate", systemImage: "sparkles")
-                        .font(.caption)
-                }
-                .buttonStyle(.borderless)
-                .disabled(isRegenerating)
-            }
-            TextEditor(text: $draft.summary)
+            Text("Summary")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(draft.summary.isEmpty ? "No summary." : draft.summary)
                 .font(.body)
-                .frame(minHeight: 44)
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary.opacity(0.4)))
-                .onChange(of: draft.summary) { _, _ in scheduleSave() }
+                .foregroundStyle(draft.summary.isEmpty ? .secondary : .primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .modifier(GlassCard(cornerRadius: 14))
                 .overlay(alignment: .center) {
-                    if isRegenerating {
-                        ProgressView().controlSize(.small)
-                    }
+                    if regenerating == .summary { ProgressView().controlSize(.small) }
                 }
         }
     }
@@ -130,61 +133,53 @@ struct EntryDetailView: View {
             }
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.quaternary.opacity(0.4)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(settings.accentWash))
     }
 
-    // MARK: - Transcript
+    // MARK: - Transcript (editable prose)
 
-    private func transcript(scrollProxy: ScrollViewProxy) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private var transcriptBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Transcript")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 if draft.transcriptEdited {
-                    Text("· edited")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                    Text("· edited").font(.caption).foregroundStyle(.tertiary)
                 }
             }
-            .padding(.bottom, 4)
 
-            ForEach($draft.segments) { $segment in
-                SegmentRow(
-                    segment: $segment,
-                    isCurrent: isCurrentAudio && player.currentTime >= segment.start && player.currentTime < segment.end,
-                    onSeek: {
-                        if !isCurrentAudio { player.load(audioURL) }
-                        player.seek(to: segment.start)
-                        if !player.isPlaying { player.togglePlayPause() }
-                    },
-                    onEdit: {
-                        draft.transcriptEdited = true
-                        scheduleSave()
-                    }
-                )
-                .id(segment.id)
-            }
+            TextField("Transcript", text: proseBinding, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .lineSpacing(4)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private func autoScroll() {
-        // Kept intentionally light — no forced scrolling to avoid fighting the user.
     }
 
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .automatic) {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Menu {
+                Button { regenerate(.title) } label: { Label("Regenerate title", systemImage: "textformat") }
+                Button { regenerate(.summary) } label: { Label("Regenerate summary", systemImage: "text.alignleft") }
+            } label: {
+                Label("Regenerate", systemImage: "sparkles")
+            }
+            .disabled(regenerating != nil)
+
             Button {
                 revealInFinder()
             } label: {
                 Label("Show in Finder", systemImage: "folder")
             }
+
             Button(role: .destructive) {
                 player.stop()
                 library.delete(draft)
+                dismiss()
             } label: {
                 Label("Delete", systemImage: "trash")
             }
@@ -203,15 +198,21 @@ struct EntryDetailView: View {
         }
     }
 
-    private func regenerate() {
-        isRegenerating = true
+    private func regenerate(_ field: Field) {
+        regenerating = field
         Task {
-            let caption = await summarizer.summarize(draft.plainText)
-            draft.title = caption.title
-            draft.summary = caption.summary
-            draft.summaryEdited = false
-            isRegenerating = false
+            switch field {
+            case .title:
+                if let title = await ollama.regenerateTitle(from: draft.prose, prompt: settings.effectiveTitlePrompt) {
+                    draft.title = title
+                }
+            case .summary:
+                if let summary = await ollama.regenerateSummary(from: draft.prose, prompt: settings.effectiveSummaryPrompt) {
+                    draft.summary = summary
+                }
+            }
             library.upsert(draft)
+            regenerating = nil
         }
     }
 
@@ -222,34 +223,24 @@ struct EntryDetailView: View {
     }
 }
 
-/// One transcript segment: a timestamp button that seeks, and inline-editable text.
-private struct SegmentRow: View {
-    @Binding var segment: Segment
-    let isCurrent: Bool
-    let onSeek: () -> Void
-    let onEdit: () -> Void
+/// Apple Liquid Glass on macOS 26; a clean translucent fallback below that.
+struct GlassCard: ViewModifier {
+    let cornerRadius: CGFloat
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Button(action: onSeek) {
-                Text(Format.clock(segment.start))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(isCurrent ? Color.accentColor : .secondary)
-                    .frame(width: 48, alignment: .trailing)
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 3)
-
-            TextField("", text: $segment.text, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.body)
-                .onChange(of: segment.text) { _, _ in onEdit() }
-        }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
-        .background {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isCurrent ? Color.accentColor.opacity(0.12) : .clear)
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(.white.opacity(0.22), lineWidth: 1)
+                )
         }
     }
 }

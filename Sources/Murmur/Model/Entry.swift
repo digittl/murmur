@@ -22,14 +22,30 @@ struct Entry: Codable, Identifiable, Hashable {
     var title: String
     var summary: String
     var segments: [Segment]
+    var text: String?           // user-edited transcript prose; overrides segments for display
     var transcriptEdited: Bool
     var summaryEdited: Bool
     var createdAt: Date
     var model: String
     var language: String?
 
-    var plainText: String {
-        segments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The transcript as flowing prose — the user's edit if present, else the
+    /// segments joined into sentences.
+    var prose: String {
+        if let text, !text.isEmpty {
+            return text
+        }
+        return Self.joinSegments(segments)
+    }
+
+    var plainText: String { prose }
+
+    /// Joins segment texts into readable prose (segments already carry leading
+    /// spaces and sentence punctuation from Whisper).
+    static func joinSegments(_ segments: [Segment]) -> String {
+        segments.map(\.text).joined()
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// The calendar day this entry belongs to, used to group the diary.

@@ -1,7 +1,8 @@
 import SwiftUI
+import AppKit
 
 /// Process entry point. Diverts to a headless self-test when launched with
-/// `--selftest <folder>` (used for CI/dev verification), else runs the app.
+/// `--selftest <folder>` (used for dev verification), else runs the app.
 @main
 enum Main {
     static func main() {
@@ -20,42 +21,115 @@ private extension Array {
     }
 }
 
+/// Runs cleanup (terminate the bundled Ollama, cancel the queue) when the app
+/// quits, so a mid-file quit leaves nothing orphaned.
+@MainActor
+private final class QuitHandler {
+    static let shared = QuitHandler()
+    var onQuit: @MainActor () -> Void = {}
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationWillTerminate(_ notification: Notification) {
+        MainActor.assumeIsolated { QuitHandler.shared.onQuit() }
+    }
+}
+
 /// Murmur — a spoken journal. Import a folder of voice notes; each is transcribed
-/// on-device with Whisper, captioned by Apple's on-device model, and laid out as
-/// a dated diary you can play back and edit. Everything lives in iCloud Drive.
+/// on-device with Whisper, captioned by a local Ollama model, and laid out as a
+/// dated diary you can play back and edit. Everything lives in iCloud Drive.
 struct MurmurApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    @StateObject private var settings: AppSettings
     @StateObject private var library: Library
     @StateObject private var transcriber: Transcriber
-    @StateObject private var summarizer: Summarizer
+    @StateObject private var ollama: OllamaService
     @StateObject private var player: Player
     @StateObject private var importer: Importer
 
     init() {
+        let settings = AppSettings()
         let library = Library()
         let transcriber = Transcriber()
-        let summarizer = Summarizer()
+        let ollama = OllamaService()
+        let importer = Importer(library: library, transcriber: transcriber, ollama: ollama, settings: settings)
+
+        _settings = StateObject(wrappedValue: settings)
         _library = StateObject(wrappedValue: library)
         _transcriber = StateObject(wrappedValue: transcriber)
-        _summarizer = StateObject(wrappedValue: summarizer)
+        _ollama = StateObject(wrappedValue: ollama)
         _player = StateObject(wrappedValue: Player())
-        _importer = StateObject(wrappedValue: Importer(library: library, transcriber: transcriber, summarizer: summarizer))
+        _importer = StateObject(wrappedValue: importer)
+
+        QuitHandler.shared.onQuit = {
+            importer.cancelAll()
+            ollama.stop()
+        }
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .environmentObject(settings)
                 .environmentObject(library)
                 .environmentObject(transcriber)
-                .environmentObject(summarizer)
+                .environmentObject(ollama)
                 .environmentObject(player)
                 .environmentObject(importer)
-                .task { library.load() }
-                .frame(minWidth: 900, minHeight: 600)
+                .tint(settings.accent)
+                .frame(minWidth: 940, minHeight: 620)
         }
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
         }
+
+        Settings {
+            SettingsView()
+                .environmentObject(settings)
+                .environmentObject(ollama)
+                .environmentObject(transcriber)
+                .tint(settings.accent)
+        }
+    }
+}
+
+/// Hosts the main window and gates it behind onboarding until both a
+/// transcription model and a caption model are downloaded and ready. Onboarding
+/// re-appears any time either becomes unavailable (fresh machine, model removed).
+struct RootView: View {
+    @EnvironmentObject private var library: Library
+    @EnvironmentObject private var transcriber: Transcriber
+    @EnvironmentObject private var ollama: OllamaService
+
+    @State private var startupChecked = false
+
+    private var transcriptionReady: Bool {
+        transcriber.isInstalled(transcriber.selectedVariant)
+    }
+    private var captionReady: Bool {
+        ollama.serverState == .ready && ollama.isInstalled(ollama.activeTag)
+    }
+    private var assistantReady: Bool {
+        ollama.serverState == .ready && ollama.isInstalled(ollama.assistantTag)
+    }
+    private var needsOnboarding: Bool {
+        !transcriptionReady || !captionReady || !assistantReady
+    }
+
+    var body: some View {
+        ContentView()
+            .task {
+                library.load()
+                await ollama.start()
+                startupChecked = true   // only judge readiness once Ollama has answered
+            }
+            .sheet(isPresented: .constant(startupChecked && needsOnboarding)) {
+                OnboardingView()
+                    .interactiveDismissDisabled()
+            }
     }
 }
 

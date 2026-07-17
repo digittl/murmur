@@ -1,0 +1,15 @@
+Murmur
+Copyright 2026 digittl
+
+This product includes software developed by digittl.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+Third-party components bundled or used by this application:
+
+- WhisperKit (https://github.com/argmaxinc/WhisperKit) — MIT License.
+  On-device speech transcription (Core ML).
+- Ollama (https://github.com/ollama/ollama) — MIT License.
+  Local LLM runtime, bundled to caption entries and power the journal chat.
+- Whisper and Qwen model weights are downloaded at runtime from their
+  respective providers and are subject to their own licenses.

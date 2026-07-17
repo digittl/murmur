@@ -83,7 +83,7 @@ final class Library: ObservableObject {
     var days: [(day: Date, entries: [Entry])] {
         let grouped = Dictionary(grouping: entries, by: \.day)
         return grouped.keys.sorted(by: >).map { day in
-            (day, grouped[day]!.sorted { $0.date < $1.date })
+            (day, grouped[day]!.sorted { $0.date > $1.date })   // newest first within the day
         }
     }
 

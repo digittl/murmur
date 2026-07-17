@@ -35,6 +35,9 @@ enum Storage {
     static var audioDir: URL { root.appendingPathComponent("audio", isDirectory: true) }
     static var entriesDir: URL { root.appendingPathComponent("entries", isDirectory: true) }
 
+    /// Where "Ask your journal" chat history is persisted (one JSON file).
+    static var chatsFile: URL { root.appendingPathComponent("chats.json") }
+
     /// Creates the library folders if they don't exist yet.
     static func ensureDirectories() throws {
         for dir in [root, audioDir, entriesDir] {
