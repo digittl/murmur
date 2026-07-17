@@ -12,6 +12,7 @@ struct ContentView: View {
     @EnvironmentObject private var library: Library
     @EnvironmentObject private var importer: Importer
     @EnvironmentObject private var ollama: OllamaService
+    @EnvironmentObject private var updater: Updater
 
     @State private var visibleMonth = Date()
     @State private var filterDay: Date?
@@ -62,6 +63,12 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showChat)
+        .overlay(alignment: .top) {
+            if updater.available != nil {
+                updateBanner
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: updater.available)
         .background(WindowTint(accent: settings.accent))
         .onDrop(of: [.fileURL], isTargeted: $isTargetedForDrop) { providers in
             handleDrop(providers)
@@ -95,6 +102,47 @@ struct ContentView: View {
                             .onEnded { _ in dragStartWidth = nil }
                     )
             )
+    }
+
+    // A slim banner offering the newer release. Sits over the top of the window;
+    // "Update now" downloads and swaps the bundle, then relaunches.
+    @ViewBuilder
+    private var updateBanner: some View {
+        if let release = updater.available {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.white)
+                Text(installingUpdate
+                     ? "Updating to \(release.version)…"
+                     : "Murmur \(release.version) is available.")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 8)
+                if installingUpdate {
+                    ProgressView().controlSize(.small).tint(.white)
+                } else {
+                    Button("Update now") {
+                        Task { await updater.downloadAndInstall() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(settings.accent)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(settings.accent)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    private var installingUpdate: Bool {
+        updater.state == .downloading || updater.state == .installing
     }
 
     // MARK: - Left column (calendar + queue)

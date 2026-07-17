@@ -10,9 +10,82 @@ struct SettingsView: View {
                 .tabItem { Label("Models", systemImage: "cpu") }
             PromptSettings()
                 .tabItem { Label("Prompts", systemImage: "text.bubble") }
+            UpdateSettings()
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
         }
         .frame(width: 480)
         .padding(20)
+    }
+}
+
+/// Software update controls: current version, auto-check toggle, manual check.
+private struct UpdateSettings: View {
+    @EnvironmentObject private var updater: Updater
+    @State private var autoCheck = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Version")
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                Text(updater.currentVersion)
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Toggle(isOn: $autoCheck) {
+                Text("Automatically check for updates on launch")
+                    .font(.subheadline)
+            }
+            .onChange(of: autoCheck) { updater.autoCheckEnabled = autoCheck }
+
+            HStack(spacing: 10) {
+                Button("Check Now") {
+                    Task { await updater.check() }
+                }
+                .disabled(updater.state == .checking)
+                statusView
+            }
+
+            if let release = updater.available {
+                Divider()
+                Text("Murmur \(release.version) is available.")
+                    .font(.subheadline.weight(.medium))
+                Button("Download & Install") {
+                    Task { await updater.downloadAndInstall() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(updater.state == .downloading || updater.state == .installing)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { autoCheck = updater.autoCheckEnabled }
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        switch updater.state {
+        case .checking:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Checking…") }
+                .font(.caption).foregroundStyle(.secondary)
+        case .upToDate:
+            Label("Up to date", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .downloading:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Downloading…") }
+                .font(.caption).foregroundStyle(.secondary)
+        case .installing:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Installing…") }
+                .font(.caption).foregroundStyle(.secondary)
+        case .failed(let why):
+            Label(why, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange)
+        case .idle:
+            EmptyView()
+        }
     }
 }
 

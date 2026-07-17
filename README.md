@@ -83,6 +83,21 @@ Download `Murmur.app.zip` from the
 drag **Murmur** to your Applications folder. First launch walks you through
 downloading the models.
 
+Once installed, Murmur keeps itself up to date — it checks for new releases on
+launch and offers a one-click **Update now** (Settings ▸ Updates to change this).
+
+### First launch (unsigned app)
+
+Murmur isn't yet notarized by Apple, so Gatekeeper will refuse to open it with a
+"can't be opened because it is from an unidentified developer" message. Clear the
+quarantine flag once, then open it normally:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Murmur.app
+```
+
+(Alternatively: right-click the app ▸ **Open** ▸ **Open** the first time.)
+
 ## Build from source
 
 Needs Xcode 16+ (Swift 6):

@@ -48,6 +48,7 @@ struct MurmurApp: App {
     @StateObject private var ollama: OllamaService
     @StateObject private var player: Player
     @StateObject private var importer: Importer
+    @StateObject private var updater = Updater()
 
     init() {
         let settings = AppSettings()
@@ -78,12 +79,18 @@ struct MurmurApp: App {
                 .environmentObject(ollama)
                 .environmentObject(player)
                 .environmentObject(importer)
+                .environmentObject(updater)
                 .tint(settings.accent)
                 .frame(minWidth: 940, minHeight: 620)
         }
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    Task { await updater.check() }
+                }
+            }
         }
 
         Settings {
@@ -91,6 +98,7 @@ struct MurmurApp: App {
                 .environmentObject(settings)
                 .environmentObject(ollama)
                 .environmentObject(transcriber)
+                .environmentObject(updater)
                 .tint(settings.accent)
         }
     }
@@ -103,6 +111,7 @@ struct RootView: View {
     @EnvironmentObject private var library: Library
     @EnvironmentObject private var transcriber: Transcriber
     @EnvironmentObject private var ollama: OllamaService
+    @EnvironmentObject private var updater: Updater
 
     @State private var startupChecked = false
 
@@ -125,6 +134,7 @@ struct RootView: View {
                 library.load()
                 await ollama.start()
                 startupChecked = true   // only judge readiness once Ollama has answered
+                await updater.checkOnLaunch()
             }
             .sheet(isPresented: .constant(startupChecked && needsOnboarding)) {
                 OnboardingView()
