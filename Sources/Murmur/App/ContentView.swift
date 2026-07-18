@@ -210,10 +210,10 @@ struct ContentView: View {
                             // to one, so the per-day heading would be redundant.
                             if filterDay == nil {
                                 dayHeader(group.day)
-                                    .background(dayOffsetReporter(group.day))
                             }
                             ForEach(group.entries) { entry in
                                 entryRow(entry, ordered: ordered)
+                                    .background(dayScanReporter(group.day))
                             }
                         }
                     }
@@ -223,11 +223,14 @@ struct ContentView: View {
                 }
                 .scrollContentBackground(.hidden)
                 .coordinateSpace(name: Self.feedSpace)
-                .onPreferenceChange(DayOffsetKey.self) { offsets in
-                    // Current day = the header that has scrolled up to (or past) the
-                    // top; nil when the first one is still below the top edge.
-                    let passed = offsets.filter { $0.value <= 4 }
-                    stickyDay = passed.max { $0.value < $1.value }?.key
+                .onPreferenceChange(DayScanKey.self) { items in
+                    // Current day = the day of the top-most row that's reached the bar
+                    // band; nil at the very top, where the inline header shows instead.
+                    // Tracking rows (always rendered near the top) rather than headers
+                    // (recycled once scrolled far off) keeps the bar from dropping out
+                    // mid-day.
+                    let passed = items.filter { $0.minY <= 44 }
+                    stickyDay = passed.max { $0.minY < $1.minY }?.day
                 }
                 // An overlay (not a safeAreaInset) so showing/hiding it never shifts
                 // the content — which would feed back into the offsets and flicker.
@@ -283,13 +286,14 @@ struct ContentView: View {
 
     static let feedSpace = "recordingsFeed"
 
-    /// Reports a day header's vertical position within the feed so `stickyDay` can
-    /// track which section is at the top.
-    private func dayOffsetReporter(_ day: Date) -> some View {
+    /// Reports an entry row's day and vertical position within the feed so
+    /// `stickyDay` can track which day is at the top. Rows (unlike day headers)
+    /// stay rendered near the top edge, so the current day never drops out mid-day.
+    private func dayScanReporter(_ day: Date) -> some View {
         GeometryReader { geo in
             Color.clear.preference(
-                key: DayOffsetKey.self,
-                value: [day: geo.frame(in: .named(Self.feedSpace)).minY]
+                key: DayScanKey.self,
+                value: [DayScanItem(day: day, minY: geo.frame(in: .named(Self.feedSpace)).minY)]
             )
         }
     }
@@ -624,12 +628,17 @@ struct ContentView: View {
     }
 }
 
-/// Collects each day header's vertical offset within the feed (day → minY), so the
-/// list can tell which section is currently at the top and pin its label.
-private struct DayOffsetKey: PreferenceKey {
-    static let defaultValue: [Date: CGFloat] = [:]
-    static func reduce(value: inout [Date: CGFloat], nextValue: () -> [Date: CGFloat]) {
-        value.merge(nextValue()) { min($0, $1) }
+/// One entry row's day and vertical offset within the feed, collected across all
+/// currently-rendered rows so the list can tell which day is at the top and pin it.
+private struct DayScanItem: Equatable {
+    let day: Date
+    let minY: CGFloat
+}
+
+private struct DayScanKey: PreferenceKey {
+    static let defaultValue: [DayScanItem] = []
+    static func reduce(value: inout [DayScanItem], nextValue: () -> [DayScanItem]) {
+        value.append(contentsOf: nextValue())
     }
 }
 
