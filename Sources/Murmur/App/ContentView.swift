@@ -22,9 +22,6 @@ struct ContentView: View {
     // The day whose section is currently scrolled up under the top of the feed —
     // shown as a slim pinned bar. nil at the very top (the inline header is visible).
     @State private var stickyDay: Date?
-    // Height of the selection/filter bar, so the pinned day bar can sit just below
-    // it (rather than being hidden) when a selection or day filter is active.
-    @State private var topInsetHeight: CGFloat = 0
 
     // Multi-select in the feed: hover reveals a checkbox; shift-click extends a
     // range; right-clicking a selected row acts on the whole selection.
@@ -228,46 +225,40 @@ struct ContentView: View {
                 .coordinateSpace(name: Self.feedSpace)
                 .onPreferenceChange(DayScanKey.self) { items in
                     // Current day = the day of the top-most row that's reached the bar
-                    // band; nil at the very top, where the inline header shows instead.
-                    // Tracking rows (always rendered near the top) rather than headers
-                    // (recycled once scrolled far off) keeps the bar from dropping out
-                    // mid-day.
-                    let passed = items.filter { $0.minY <= 44 }
-                    stickyDay = passed.max { $0.minY < $1.minY }?.day
-                }
-                // An overlay (not a safeAreaInset) so showing/hiding it never shifts
-                // the content — which would feed back into the offsets and flicker.
-                // Offset below the selection/filter bar (topInsetHeight) so it sits
-                // beneath it rather than colliding, and still shows during selection.
-                .overlay(alignment: .top) {
-                    if filterDay == nil, let day = stickyDay {
-                        stickyDayBar(day)
-                            .padding(.top, topInsetHeight)
+                    // band. The set/clear thresholds are spaced wider than the bar's
+                    // height so that the bar appearing (which shifts the rows down)
+                    // can't immediately un-trigger itself and flicker at the top edge.
+                    if let top = items.filter({ $0.minY <= 44 }).max(by: { $0.minY < $1.minY })?.day {
+                        stickyDay = top
+                    } else if items.allSatisfy({ $0.minY > 96 }) {
+                        stickyDay = nil   // back at the very top; the inline header shows
                     }
                 }
             }
         }
         .navigationTitle("Recordings")
+        // One pinned stack at the top: selection/filter bar, with the current-day
+        // bar docked directly beneath it (or on its own when nothing's selected).
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !selection.isEmpty || filterDay != nil {
+            let day = filterDay == nil ? stickyDay : nil
+            if !selection.isEmpty || filterDay != nil || day != nil {
                 VStack(spacing: 0) {
                     if !selection.isEmpty {
                         selectionBar
                     }
-                    if let day = filterDay {
-                        filterChip(day)
+                    if let filter = filterDay {
+                        filterChip(filter)
+                    }
+                    if let day {
+                        stickyDayBar(day)
                     }
                 }
                 .background(.bar)   // opaque header layer so rows scroll cleanly under it
                 .overlay(alignment: .bottom) {
                     Divider().opacity(0.6)
                 }
-                .background(GeometryReader { geo in
-                    Color.clear.preference(key: TopInsetHeightKey.self, value: geo.size.height)
-                })
             }
         }
-        .onPreferenceChange(TopInsetHeightKey.self) { topInsetHeight = $0 }
         .onExitCommand { selection.removeAll() }   // Esc clears the selection
         .confirmationDialog(
             pendingDelete.count > 1 ? "Delete \(pendingDelete.count) recordings?" : "Delete this recording?",
@@ -322,8 +313,6 @@ struct ContentView: View {
         .padding(.leading, 40)
         .padding(.trailing, 16)
         .padding(.vertical, 10)
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
     }
 
     private func entryRow(_ entry: Entry, ordered: [UUID]) -> some View {
@@ -650,15 +639,6 @@ private struct DayScanKey: PreferenceKey {
     static let defaultValue: [DayScanItem] = []
     static func reduce(value: inout [DayScanItem], nextValue: () -> [DayScanItem]) {
         value.append(contentsOf: nextValue())
-    }
-}
-
-/// The measured height of the selection/filter bar, so the pinned day bar can be
-/// offset to sit directly beneath it.
-private struct TopInsetHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
     }
 }
 
