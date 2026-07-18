@@ -131,8 +131,11 @@ struct RootView: View {
     private var assistantReady: Bool {
         ollama.isInstalled(ollama.assistantTag)
     }
+    private var modelsReady: Bool {
+        transcriptionReady && captionReady && assistantReady
+    }
     private var needsOnboarding: Bool {
-        !settings.profileComplete || !transcriptionReady || !captionReady || !assistantReady
+        !settings.profileComplete || !modelsReady
     }
 
     var body: some View {
@@ -144,11 +147,13 @@ struct RootView: View {
                 showOnboarding = needsOnboarding
                 await updater.checkOnLaunch()
             }
-            // Re-appear if something needed later goes missing (a model deleted, the
-            // profile cleared). Dismissal is explicit — the sheet closes only when
-            // OnboardingView calls back, never reactively as the name is typed.
-            .onChange(of: needsOnboarding) { _, needs in
-                if startupChecked && needs {
+            // Re-appear if a required model goes missing later (deleted in Settings).
+            // Watches models only, NOT the profile: the profile is edited live in
+            // Settings, so keying off it would pop onboarding mid-edit (e.g. while the
+            // name is cleared to retype it). Profile is a startup-only gate. Dismissal
+            // is always explicit — the sheet closes only when OnboardingView calls back.
+            .onChange(of: modelsReady) { _, ready in
+                if startupChecked && !ready {
                     showOnboarding = true
                 }
             }
