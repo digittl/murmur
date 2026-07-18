@@ -356,7 +356,8 @@ final class Importer: ObservableObject {
             let caption = await ollama.summarize(
                 text,
                 titlePrompt: settings.effectiveTitlePrompt,
-                summaryPrompt: settings.effectiveSummaryPrompt
+                summaryPrompt: settings.effectiveSummaryPrompt,
+                persona: settings.authorPersona
             )
 
             if cancelledIDs.contains(item.id) {
@@ -438,7 +439,8 @@ final class Importer: ObservableObject {
             let caption = await ollama.summarize(
                 text,
                 titlePrompt: settings.effectiveTitlePrompt,
-                summaryPrompt: settings.effectiveSummaryPrompt
+                summaryPrompt: settings.effectiveSummaryPrompt,
+                persona: settings.authorPersona
             )
 
             if cancelledIDs.contains(item.id) {

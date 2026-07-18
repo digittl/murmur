@@ -104,21 +104,24 @@ struct MurmurApp: App {
     }
 }
 
-/// Hosts the main window and gates it behind onboarding until both a
-/// transcription model and a caption model are downloaded and ready. Onboarding
-/// re-appears any time either becomes unavailable (fresh machine, model removed).
+/// Hosts the main window and gates it behind onboarding until the profile (name +
+/// gender) and the transcription/caption/assistant models are all set up.
+/// Onboarding re-appears any time one of those becomes unavailable (fresh machine,
+/// model removed, profile cleared).
 struct RootView: View {
+    @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var library: Library
     @EnvironmentObject private var transcriber: Transcriber
     @EnvironmentObject private var ollama: OllamaService
     @EnvironmentObject private var updater: Updater
 
     @State private var startupChecked = false
+    @State private var showOnboarding = false
 
-    // Onboarding is about whether the models are *downloaded and chosen*, not
-    // whether the Ollama server happens to be answering this instant — a slow or
-    // failed probe must not resurrect the welcome screen for a set-up machine.
-    // The captioning/chat code paths guard on live server state separately.
+    // Onboarding is about whether the profile and models are *set up*, not whether
+    // the Ollama server happens to be answering this instant — a slow or failed
+    // probe must not resurrect the welcome screen for a set-up machine. The
+    // captioning/chat code paths guard on live server state separately.
     private var transcriptionReady: Bool {
         transcriber.isInstalled(transcriber.selectedVariant)
     }
@@ -128,20 +131,34 @@ struct RootView: View {
     private var assistantReady: Bool {
         ollama.isInstalled(ollama.assistantTag)
     }
+    private var modelsReady: Bool {
+        transcriptionReady && captionReady && assistantReady
+    }
     private var needsOnboarding: Bool {
-        !transcriptionReady || !captionReady || !assistantReady
+        !settings.profileComplete || !modelsReady
     }
 
     var body: some View {
         ContentView()
             .task {
-                library.load()
+                await library.load()
                 await ollama.start()
                 startupChecked = true   // only judge readiness once Ollama has answered
+                showOnboarding = needsOnboarding
                 await updater.checkOnLaunch()
             }
-            .sheet(isPresented: .constant(startupChecked && needsOnboarding)) {
-                OnboardingView()
+            // Re-appear if a required model goes missing later (deleted in Settings).
+            // Watches models only, NOT the profile: the profile is edited live in
+            // Settings, so keying off it would pop onboarding mid-edit (e.g. while the
+            // name is cleared to retype it). Profile is a startup-only gate. Dismissal
+            // is always explicit — the sheet closes only when OnboardingView calls back.
+            .onChange(of: modelsReady) { _, ready in
+                if startupChecked && !ready {
+                    showOnboarding = true
+                }
+            }
+            .sheet(isPresented: $showOnboarding) {
+                OnboardingView(onComplete: { showOnboarding = false })
                     .interactiveDismissDisabled()
             }
     }

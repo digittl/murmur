@@ -238,17 +238,24 @@ final class OllamaService: ObservableObject {
     // MARK: - Captioning
 
     /// Default guidance per field. Custom prompts (from Settings) replace these.
-    static let defaultTitleGuidance = "a title of 3–7 words, evocative, with no surrounding quotes or trailing punctuation, and no personal pronouns"
-    static let defaultSummaryGuidance = "a summary of one or two sentences in past tense, like a diary caption; use no personal pronouns (no I, we, you, he, she, they, or names) — lead with the action verb, e.g. \"Reflected on…\", \"Worked through…\""
+    static let defaultTitleGuidance = "3–7 evocative words. No surrounding quotes, no trailing punctuation, no names or pronouns."
+    // Pronoun-neutral by default (leads with the action). When a profile is set, the
+    // persona clause is what tells the model to bring in the author's pronouns — so
+    // with no profile, captions stay consistent instead of guessing a gender.
+    static let defaultSummaryGuidance = "one or two past-tense sentences, like a diary caption. Lead with the action, e.g. \"Reflected on the week…\", \"Worked through a hard call…\"."
 
-    private func systemPrompt(title: String?, summary: String?) -> String {
-        """
-        You caption entries in a personal spoken journal. Given a raw voice-note \
-        transcript, reply with ONLY a JSON object of the form \
-        {"title": "...", "summary": "..."}. For the title, follow: \
-        \(title ?? Self.defaultTitleGuidance). For the summary, follow: \
-        \(summary ?? Self.defaultSummaryGuidance). Use only what's in the \
-        transcript; invent nothing.
+    /// The caption system prompt. `persona` (from `AppSettings.authorPersona`) tells
+    /// the model who the entry is about and which pronouns to use; it's blank until
+    /// the profile is set, so nothing empty is ever injected.
+    private func systemPrompt(title: String?, summary: String?, persona: String) -> String {
+        let persona = persona.isEmpty ? "" : persona + " "
+        return """
+        You caption entries in a personal spoken journal. \(persona)Given a raw \
+        voice-note transcript, reply with ONLY a JSON object of the form \
+        {"title": "...", "summary": "..."}.
+        Title: \(title ?? Self.defaultTitleGuidance)
+        Summary: \(summary ?? Self.defaultSummaryGuidance)
+        Use only what's in the transcript; invent nothing.
         """
     }
 
@@ -391,7 +398,7 @@ final class OllamaService: ObservableObject {
 
     /// Captions a transcript (both fields) with the active model. Never throws —
     /// falls back to a heuristic caption if the model isn't ready.
-    func summarize(_ transcript: String, titlePrompt: String? = nil, summaryPrompt: String? = nil) async -> DiarySummary {
+    func summarize(_ transcript: String, titlePrompt: String? = nil, summaryPrompt: String? = nil, persona: String = "") async -> DiarySummary {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return DiarySummary(title: "Untitled", summary: "")
@@ -400,7 +407,7 @@ final class OllamaService: ObservableObject {
             return Self.fallback(for: trimmed)
         }
 
-        let system = systemPrompt(title: titlePrompt, summary: summaryPrompt)
+        let system = systemPrompt(title: titlePrompt, summary: summaryPrompt, persona: persona)
         guard let content = await chat(system: system, user: "Caption this transcript:\n\n\(clip(trimmed))", json: true),
               let contentData = content.data(using: .utf8),
               let summary = try? JSONDecoder().decode(DiarySummary.self, from: contentData) else {
@@ -415,19 +422,21 @@ final class OllamaService: ObservableObject {
     }
 
     /// Regenerates just the title. Returns nil if the model isn't ready.
-    func regenerateTitle(from transcript: String, prompt: String? = nil) async -> String? {
+    func regenerateTitle(from transcript: String, prompt: String? = nil, persona: String = "") async -> String? {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, serverState == .ready, isInstalled(activeTag) else { return nil }
-        let system = "You title entries in a personal spoken journal. Reply with ONLY the title text — no quotes, no punctuation at the end. Title guidance: \(prompt ?? Self.defaultTitleGuidance). Use only what's in the transcript."
+        let persona = persona.isEmpty ? "" : persona + " "
+        let system = "You title entries in a personal spoken journal. \(persona)Reply with ONLY the title text — no quotes, no punctuation at the end. Title guidance: \(prompt ?? Self.defaultTitleGuidance) Use only what's in the transcript."
         guard let content = await chat(system: system, user: "Title this transcript:\n\n\(clip(trimmed))", json: false) else { return nil }
         return content.trimmingCharacters(in: CharacterSet(charactersIn: " \"'.\n"))
     }
 
     /// Regenerates just the summary. Returns nil if the model isn't ready.
-    func regenerateSummary(from transcript: String, prompt: String? = nil) async -> String? {
+    func regenerateSummary(from transcript: String, prompt: String? = nil, persona: String = "") async -> String? {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, serverState == .ready, isInstalled(activeTag) else { return nil }
-        let system = "You summarize entries in a personal spoken journal. Reply with ONLY the summary text. Summary guidance: \(prompt ?? Self.defaultSummaryGuidance). Use only what's in the transcript; invent nothing."
+        let persona = persona.isEmpty ? "" : persona + " "
+        let system = "You summarize entries in a personal spoken journal. \(persona)Reply with ONLY the summary text. Summary guidance: \(prompt ?? Self.defaultSummaryGuidance) Use only what's in the transcript; invent nothing."
         guard let content = await chat(system: system, user: "Summarize this transcript:\n\n\(clip(trimmed))", json: false) else { return nil }
         return content.trimmingCharacters(in: .whitespacesAndNewlines)
     }

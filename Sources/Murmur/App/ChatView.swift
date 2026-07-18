@@ -330,23 +330,31 @@ struct ChatView: View {
         working.append(ChatMessage(role: .user, text: question))
         store.update(messages: working)
 
-        // Retrieval pre-pass (Clod-style): search the journal on the question up
-        // front and hand the model the evidence before its first call, so it
-        // answers decisively instead of hedging or asking permission to look.
-        let evidence = searchJournal(query: question, limit: 40)
+        // Retrieval pre-pass: search the journal on this question and hand the model
+        // a compact overview up front, so it starts from the right entries instead of
+        // hunting blind. Deliberately COMPACT (summaries + short snippets, not full
+        // transcripts) so it doesn't drown the conversation — the model pulls full
+        // detail with the tools when it needs it. Skipped for a bare follow-up ("go
+        // on", "why?") that has no search terms: there the conversation is what
+        // matters, and a junk search would only bury it.
+        let digest = searchDigest(query: question, limit: 8)
 
-        // Build the running message list: system + prior turns + this question,
-        // then the pre-searched evidence as the freshest context to reason over.
-        var convo: [[String: Any]] = [["role": "system", "content": Self.systemPrompt()]]
+        // Build the running message list: system + the full prior conversation + this
+        // question, then (only if we found any) the fresh evidence last, where model
+        // attention is strongest — scoped to THIS question, not the whole history.
+        var convo: [[String: Any]] = [["role": "system", "content": Self.systemPrompt(author: settings.trimmedName)]]
         for message in working {
             convo.append(["role": message.role.rawValue, "content": message.text])
         }
-        convo.append(["role": "system", "content": """
-        Entries already searched for the user's latest question (use these as your \
-        primary evidence; search further only for terms these don't cover):
+        if !digest.isEmpty {
+            convo.append(["role": "system", "content": """
+            Journal entries relevant to the latest question — a starting point. Call \
+            the tools for full transcripts, exact quantities, or more entries when you \
+            need them:
 
-        \(evidence)
-        """])
+            \(digest)
+            """])
+        }
         isThinking = true
         streamingText = nil
 
@@ -382,48 +390,37 @@ struct ChatView: View {
         }
     }
 
-    private static func systemPrompt() -> String {
+    private static func systemPrompt(author: String?) -> String {
         let today = Date().formatted(date: .complete, time: .omitted)
+        let who = author.map { "You are \($0)'s personal journal assistant." }
+            ?? "You are the user's personal journal assistant."
         return """
-        You are the user's personal journal assistant. Today is \(today).
+        \(who) Today is \(today).
 
-        You CANNOT see the whole journal directly — it may be large. Relevant entries \
-        for the current question are pre-searched and given to you in a system message; \
-        base every statement ONLY on that evidence and on what the tools return. Never \
-        answer from memory, and never guess or estimate.
+        GROUNDING
+        • The journal may be large; you can't see all of it. Answer only from the \
+          entries you are given and what the tools return — never from memory, and \
+          never guess a fact, number, or date.
+        • Cite entries by date and title. If nothing relevant exists, say so plainly.
 
-        DECISIVENESS — this is critical:
-        • Give ONE complete, self-contained answer per question. Do all your searching \
-          first, silently, then answer.
-        • NEVER end with a question or an offer to look further. Banned closers include \
-          "Would you like me to check previous days?", "Would you like me to search \
-          further?", "Let me know if you want more detail", and anything similar. If \
-          more searching would help, just do it with the tools — never ask permission.
-        • Your answer is final. Do not defer, hedge, or promise to look more later. If \
-          the evidence is thin, say what you found and state plainly that there isn't \
-          more — do not ask to keep looking.
-        • NEVER restate or re-send an answer you have already given earlier in this \
-          conversation. If the user says "yes"/"go on"/"continue", they want the NEXT \
-          step or MORE detail, not a repeat — search deeper and add new information.
-        • Do not narrate your process ("Let me search…", "I'll check…"). Just answer.
+        CONVERSATION
+        • This is a continuing conversation — read the earlier turns. A short follow-up \
+          ("go on", "what about earlier?", "why?") refers to what you just discussed; \
+          answer it in that context rather than starting over.
+        • Never repeat an answer you already gave. "Yes" / "continue" means go deeper \
+          or add new detail, not restate.
 
-        How to work:
-        • The pre-searched evidence is your starting point. If it doesn't fully cover \
-          the question, call the tools with a high `limit` to gather the rest before \
-          answering — don't stop at a partial view.
-        • Try synonyms and related terms yourself. If a medication, place, or person \
-          has other names or brand names (e.g. diazepam / Valium), search each and \
-          combine the results — without asking.
-        • For counting, totalling, or "how many / how much / how often" questions: \
-          gather EVERY relevant entry, list the specific mentions with their dates, \
-          and if entries state quantities (e.g. "took two tablets"), sum the actual \
-          quantities — not the entry count. Show the per-entry breakdown, then the total.
-        • Cite entries by date and title. If nothing relevant exists, or the data is \
-          incomplete or ambiguous, say so plainly in your single answer instead of \
-          inventing or deferring.
+        ANSWERING
+        • Do all your searching first, silently, then give ONE complete answer. Don't \
+          narrate ("Let me check…") and don't end by offering to look further — if more \
+          searching would help, just do it with the tools.
+        • Try synonyms yourself (e.g. diazepam / Valium) and combine the results.
+        • For "how many / how much / how often": gather every relevant entry, list the \
+          mentions with their dates, sum the actual quantities stated (not the entry \
+          count), then give the total.
 
-        Be accurate first, concise second. It is far better to say you're unsure than \
-        to state a wrong number — but say it once, decisively.
+        Be accurate first, concise second. Better to say you're unsure, once, than to \
+        state a wrong number.
         """
     }
 
@@ -489,18 +486,56 @@ struct ChatView: View {
         "you", "your", "have", "has", "had", "about", "any", "all", "some", "from",
     ]
 
-    private func searchJournal(query: String, limit: Int) -> String {
-        let terms = query.lowercased()
+    /// The searchable terms in a query: words over two letters that aren't
+    /// stopwords. Empty for a bare follow-up like "go on" — the signal to skip the
+    /// retrieval pre-pass and lean on the conversation instead.
+    private static func terms(in query: String) -> [String] {
+        query.lowercased()
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .map(String.init)
-            .filter { $0.count > 2 && !Self.stopwords.contains($0) }
-        guard !terms.isEmpty else { return "No query given." }
-        let scored = library.entries.compactMap { entry -> (Entry, Int)? in
+            .filter { $0.count > 2 && !stopwords.contains($0) }
+    }
+
+    /// Scores entries against a query by how many of its terms they contain, best
+    /// (then newest) first. Shared by the pre-pass digest and the search tool.
+    private func rankedEntries(for query: String) -> [Entry] {
+        let terms = Self.terms(in: query)
+        guard !terms.isEmpty else {
+            return []
+        }
+        return library.entries.compactMap { entry -> (Entry, Int)? in
             let hay = "\(entry.title) \(entry.summary) \(entry.prose)".lowercased()
             let score = terms.reduce(0) { $0 + (hay.contains($1) ? 1 : 0) }
             return score > 0 ? (entry, score) : nil
         }
         .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.date > $1.0.date }
+        .map(\.0)
+    }
+
+    /// A compact, low-token overview of the entries most relevant to `query` — date,
+    /// title, summary and a short snippet each. Fed to the model up front as a
+    /// starting point; it pulls full transcripts with the tools when it needs them.
+    /// Empty when the query has no search terms or nothing matches.
+    private func searchDigest(query: String, limit: Int) -> String {
+        let matches = rankedEntries(for: query)
+        guard !matches.isEmpty else {
+            return ""
+        }
+        let shown = matches.prefix(limit)
+        let blocks = shown.map { entry -> String in
+            let snippet = entry.prose.count > 240 ? String(entry.prose.prefix(240)) + "…" : entry.prose
+            return "[\(stamp(entry))] \(title(entry)) — \(entry.summary)\n\(snippet)"
+        }
+        var out = "\(matches.count) entr\(matches.count == 1 ? "y" : "ies") match \"\(query)\". Most relevant:\n\n"
+        out += blocks.joined(separator: "\n\n")
+        return out
+    }
+
+    private func searchJournal(query: String, limit: Int) -> String {
+        guard !Self.terms(in: query).isEmpty else {
+            return "No searchable terms in \"\(query)\"."
+        }
+        let scored = rankedEntries(for: query)
 
         guard !scored.isEmpty else {
             return "0 entries mention \"\(query)\". Try a different term or a synonym."
@@ -511,7 +546,7 @@ struct ChatView: View {
         let shown = scored.prefix(cap)
         var out = "\(scored.count) entr\(scored.count == 1 ? "y" : "ies") mention \"\(query)\""
         out += shown.count < scored.count ? " (showing the top \(shown.count) — raise limit to see more):\n\n" : ":\n\n"
-        out += shown.map { entry, _ in block(entry, transcriptLimit: 1500) }.joined(separator: "\n\n")
+        out += shown.map { block($0, transcriptLimit: 1500) }.joined(separator: "\n\n")
         return out
     }
 

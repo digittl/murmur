@@ -4,6 +4,11 @@ import SwiftUI
 /// and a caption model, download them, and enter the app. Dismisses itself once
 /// both are ready.
 struct OnboardingView: View {
+    /// Called once the profile is filled in and every chosen model is downloaded —
+    /// this is what dismisses the sheet (see `RootView`). Dismissal is never
+    /// reactive, so typing a name can't make the welcome screen vanish mid-keystroke.
+    let onComplete: () -> Void
+
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var transcriber: Transcriber
     @EnvironmentObject private var ollama: OllamaService
@@ -20,6 +25,14 @@ struct OnboardingView: View {
 
             section(
                 number: "1",
+                title: "About you",
+                subtitle: "Personalises your captions and answers with your name and pronouns. Stays on your Mac."
+            ) {
+                ProfileEditor()
+            }
+
+            section(
+                number: "2",
                 title: "Transcription",
                 subtitle: "Turns your recordings into text, on-device with Whisper."
             ) {
@@ -36,7 +49,7 @@ struct OnboardingView: View {
             }
 
             section(
-                number: "2",
+                number: "3",
                 title: "Captions",
                 subtitle: "Writes each entry's title and summary — a local model run by Ollama."
             ) {
@@ -53,7 +66,7 @@ struct OnboardingView: View {
             }
 
             section(
-                number: "3",
+                number: "4",
                 title: "Ask your journal",
                 subtitle: "Answers questions about your entries. Standard is shared with the Best caption model."
             ) {
@@ -119,6 +132,12 @@ struct OnboardingView: View {
 
     private var footer: some View {
         HStack {
+            if !settings.profileComplete {
+                Label("Add your name and gender to continue.", systemImage: "person.crop.circle.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Spacer()
 
             if busy {
@@ -133,7 +152,7 @@ struct OnboardingView: View {
                     .frame(minWidth: 150)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(busy)
+            .disabled(busy || !settings.profileComplete)
         }
     }
 
@@ -163,7 +182,12 @@ struct OnboardingView: View {
             // fetch it after captions to avoid pulling the same weights twice.
             await ensureAssistant()
             busy = false
-            // RootView's gate dismisses this sheet automatically once all are ready.
+
+            // Dismiss only when the profile is filled and every model is present.
+            // A failed download leaves the sheet up with the button re-enabled.
+            if settings.profileComplete, transcriptionReady, captionReady, assistantReady {
+                onComplete()
+            }
         }
     }
 

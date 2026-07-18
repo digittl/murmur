@@ -26,36 +26,50 @@ final class Library: ObservableObject {
         return d
     }()
 
-    /// Loads every entry JSON from disk, newest first.
-    func load() {
+    /// Loads every entry JSON from disk, newest first. The reads run off the main
+    /// actor: on an iCloud-Drive library, `Data(contentsOf:)` can block while iCloud
+    /// materialises an evicted file, and doing that on the main thread beachballs the
+    /// whole app on launch. Only the final assignment hops back to the main actor.
+    func load() async {
         do {
             try Storage.ensureDirectories()
         } catch {
             return
         }
 
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: Storage.entriesDir,
-            includingPropertiesForKeys: nil
-        )) ?? []
+        let entriesDir = Storage.entriesDir
+        let deletedFile = Storage.deletedFile
 
-        var loaded: [Entry] = []
-        for file in files where file.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: file),
-                  let entry = try? decoder.decode(Entry.self, from: data) else {
-                continue
+        let result = await Task.detached(priority: .userInitiated) { () -> (entries: [Entry], deleted: [String]) in
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: entriesDir,
+                includingPropertiesForKeys: nil
+            )) ?? []
+
+            var loaded: [Entry] = []
+            for file in files where file.pathExtension == "json" {
+                guard let data = try? Data(contentsOf: file),
+                      let entry = try? decoder.decode(Entry.self, from: data) else {
+                    continue
+                }
+                loaded.append(entry)
             }
-            loaded.append(entry)
-        }
+            loaded.sort { $0.date > $1.date }
 
-        loaded.sort { $0.date > $1.date }
-        entries = loaded
-        checksums = Set(loaded.map(\.checksum))
+            var deleted: [String] = []
+            if let data = try? Data(contentsOf: deletedFile),
+               let list = try? decoder.decode([String].self, from: data) {
+                deleted = list
+            }
+            return (loaded, deleted)
+        }.value
 
-        if let data = try? Data(contentsOf: Storage.deletedFile),
-           let list = try? decoder.decode([String].self, from: data) {
-            deletedChecksums = Set(list)
-        }
+        entries = result.entries
+        checksums = Set(result.entries.map(\.checksum))
+        deletedChecksums = Set(result.deleted)
     }
 
     func hasChecksum(_ checksum: String) -> Bool {

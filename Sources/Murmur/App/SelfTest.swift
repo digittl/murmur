@@ -19,7 +19,7 @@ enum SelfTest {
             print("storage root: \(Storage.root.path)")
 
             let library = Library()
-            library.load()
+            await library.load()
             let transcriber = Transcriber()
             let ollama = OllamaService()
 
@@ -58,7 +58,7 @@ enum SelfTest {
 
             // Persistence: a fresh Library reads the same entries back.
             let reopened = Library()
-            reopened.load()
+            await reopened.load()
             print("persistence: reloaded \(reopened.entries.count) — \(reopened.entries.count == after ? "PASS" : "FAIL")")
 
             // Soft delete: delete one entry, re-import the folder — it must not come
@@ -73,7 +73,7 @@ enum SelfTest {
                 let resurrected = library.entries.contains { $0.checksum == checksum }
 
                 let recheck = Library()
-                recheck.load()
+                await recheck.load()
                 let remembered = recheck.wasDeleted(checksum)
                 softDeleteOK = !resurrected && library.entries.count == after - 1 && remembered
                 print("soft delete: re-import after delete — \(softDeleteOK ? "PASS" : "FAIL")")

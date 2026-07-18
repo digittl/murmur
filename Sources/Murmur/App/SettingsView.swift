@@ -6,6 +6,8 @@ struct SettingsView: View {
         TabView {
             AppearanceSettings()
                 .tabItem { Label("Appearance", systemImage: "paintpalette") }
+            ProfileSettings()
+                .tabItem { Label("You", systemImage: "person") }
             ModelSettings()
                 .tabItem { Label("Models", systemImage: "cpu") }
             PromptSettings()
@@ -143,6 +145,55 @@ private struct PromptSettings: View {
                     }
             }
         }
+    }
+}
+
+/// Name + gender editor, shared by Settings ▸ You and onboarding. Writes straight
+/// through to `AppSettings`; both fields must be set before the app opens (see
+/// `AppSettings.profileComplete`).
+struct ProfileEditor: View {
+    @EnvironmentObject private var settings: AppSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name").font(.subheadline.weight(.medium))
+                TextField("Your name", text: $settings.authorName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Gender").font(.subheadline.weight(.medium))
+                Picker("Gender", selection: $settings.gender) {
+                    ForEach(AppSettings.Gender.choices) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text("Sets the pronouns Murmur uses when it writes about you — he/him, she/her, or they/them for “Prefer not to say”.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// The "You" tab — name and gender, used to personalise captions and the assistant.
+private struct ProfileSettings: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("About you")
+                .font(.headline)
+            Text("Used to caption your entries and answer questions with your name and the right pronouns. Never leaves your Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ProfileEditor()
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

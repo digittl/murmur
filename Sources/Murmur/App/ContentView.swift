@@ -253,21 +253,28 @@ struct ContentView: View {
         }
     }
 
-    /// A day boundary that also pins to the top while you're within its section
-    /// (see the `pinnedViews` on the feed). Opaque so rows scroll cleanly beneath.
+    /// A compact day boundary that also pins to the top while you're within its
+    /// section (see the `pinnedViews` on the feed). Full-width and opaque (`.bar`) so
+    /// rows scroll cleanly beneath, but light on chrome — a small uppercase label and
+    /// a hairline rule instead of a tall bar with a full divider, so it reads as a
+    /// quiet section marker and gives the feed back its vertical space.
     private func dayHeader(_ day: Date) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(settings.accent).frame(width: 6, height: 6)
+        HStack(spacing: 7) {
+            Circle().fill(settings.accent).frame(width: 5, height: 5)
             Text(Format.dayHeading(day))
-                .font(.subheadline.weight(.semibold))
+                .font(.caption2.weight(.bold))
+                .textCase(.uppercase)
+                .tracking(0.4)
                 .foregroundStyle(settings.accent)
             Spacer(minLength: 0)
         }
         .padding(.leading, 16)   // + the feed's leading 12 = dot at x=28, matched by the selection bar
         .padding(.trailing, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 5)
         .background(.bar)
-        .overlay(alignment: .bottom) { Divider().opacity(0.4) }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(settings.accent.opacity(0.12)).frame(height: 1)
+        }
     }
 
     private func entryRow(_ entry: Entry, ordered: [UUID]) -> some View {
@@ -366,11 +373,11 @@ struct ContentView: View {
             Task {
                 var updated = entry
                 if title {
-                    if let value = await ollama.regenerateTitle(from: entry.prose, prompt: settings.effectiveTitlePrompt) {
+                    if let value = await ollama.regenerateTitle(from: entry.prose, prompt: settings.effectiveTitlePrompt, persona: settings.authorPersona) {
                         updated.title = value
                     }
                 } else {
-                    if let value = await ollama.regenerateSummary(from: entry.prose, prompt: settings.effectiveSummaryPrompt) {
+                    if let value = await ollama.regenerateSummary(from: entry.prose, prompt: settings.effectiveSummaryPrompt, persona: settings.authorPersona) {
                         updated.summary = value
                     }
                 }
