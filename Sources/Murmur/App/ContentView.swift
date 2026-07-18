@@ -206,11 +206,8 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(days, id: \.day) { group in
-                            // The filter chip already names the day when filtering
-                            // to one, so the per-day heading would be redundant.
-                            if filterDay == nil {
-                                dayHeader(group.day)
-                            }
+                            // No inline day heading — the pinned bar at the top is the
+                            // single day header, tracking whichever day is on screen.
                             ForEach(group.entries) { entry in
                                 entryRow(entry, ordered: ordered)
                                     .background(dayScanReporter(group.day))
@@ -224,33 +221,28 @@ struct ContentView: View {
                 .scrollContentBackground(.hidden)
                 .coordinateSpace(name: Self.feedSpace)
                 .onPreferenceChange(DayScanKey.self) { items in
-                    // Current day = the day of the top-most row that's reached the bar
-                    // band. The set/clear thresholds are spaced wider than the bar's
-                    // height so that the bar appearing (which shifts the rows down)
-                    // can't immediately un-trigger itself and flicker at the top edge.
-                    if let top = items.filter({ $0.minY <= 44 }).max(by: { $0.minY < $1.minY })?.day {
-                        stickyDay = top
-                    } else if items.allSatisfy({ $0.minY > 96 }) {
-                        stickyDay = nil   // back at the very top; the inline header shows
-                    }
+                    // The pinned bar always shows a day; track the top-most row on
+                    // screen, defaulting to the newest day before the first scroll.
+                    let top = items.filter { $0.minY <= 44 }.max { $0.minY < $1.minY }?.day
+                    stickyDay = top ?? visibleDays.first?.day
                 }
             }
         }
         .navigationTitle("Recordings")
-        // One pinned stack at the top: selection/filter bar, with the current-day
-        // bar docked directly beneath it (or on its own when nothing's selected).
+        // One pinned stack at the top: the current-day bar on top, with the
+        // selection/filter bar docked directly beneath it when active.
         .safeAreaInset(edge: .top, spacing: 0) {
             let day = filterDay == nil ? stickyDay : nil
-            if !selection.isEmpty || filterDay != nil || day != nil {
+            if day != nil || !selection.isEmpty || filterDay != nil {
                 VStack(spacing: 0) {
+                    if let day {
+                        stickyDayBar(day)
+                    }
                     if !selection.isEmpty {
                         selectionBar
                     }
                     if let filter = filterDay {
                         filterChip(filter)
-                    }
-                    if let day {
-                        stickyDayBar(day)
                     }
                 }
                 .background(.bar)   // opaque header layer so rows scroll cleanly under it
@@ -270,18 +262,6 @@ struct ContentView: View {
         } message: {
             Text("This permanently removes the audio and transcript. This can't be undone.")
         }
-    }
-
-    private func dayHeader(_ day: Date) -> some View {
-        HStack(spacing: 8) {
-            Circle().fill(settings.accent).frame(width: 6, height: 6)
-            Text(Format.dayHeading(day))
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(settings.accent)
-        }
-        .padding(.top, 22)
-        .padding(.bottom, 16)
-        .padding(.leading, 28)
     }
 
     static let feedSpace = "recordingsFeed"
