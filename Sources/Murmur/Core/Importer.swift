@@ -30,6 +30,9 @@ final class Importer: ObservableObject {
         let name: String
         var state: ItemState = .pending
         var entryID: UUID?
+        // When set, this item re-transcribes an existing entry's stored audio in
+        // place rather than importing a new file (see `reprocess`).
+        var reTranscribeEntryID: UUID?
     }
 
     enum RunState { case idle, running, paused }
@@ -81,6 +84,29 @@ final class Importer: ObservableObject {
         if runState == .idle {
             startWorker()
         }
+    }
+
+    /// Re-runs transcription (and re-captioning) on an entry that's already in the
+    /// library, using its stored audio and the currently selected model. Routed
+    /// through the same queue as imports so WhisperKit is never asked to do two
+    /// files at once, and so progress shows in the queue view. Updates the entry
+    /// in place; a fresh transcript means a fresh title and summary too.
+    func reTranscribe(_ entry: Entry) {
+        guard !isReTranscribing(entry.id) else {
+            return
+        }
+        autoClearTask?.cancel()
+        let label = entry.title.isEmpty ? entry.originalName : entry.title
+        items.append(Item(url: library.audioURL(for: entry), name: label, reTranscribeEntryID: entry.id))
+
+        if runState == .idle {
+            startWorker()
+        }
+    }
+
+    /// True while a re-transcribe of this entry is queued or running.
+    func isReTranscribing(_ entryID: UUID) -> Bool {
+        items.contains { $0.reTranscribeEntryID == entryID && !$0.state.isFinished }
     }
 
     /// Halts after the current file finishes; pending items keep their place.
@@ -159,9 +185,16 @@ final class Importer: ObservableObject {
         worker = nil
         if runState == .running {
             runState = .idle
-            let added = items.filter { $0.state == .done }.count
+            let done = items.filter { $0.state == .done }
+            let added = done.filter { $0.reTranscribeEntryID == nil }.count
+            let redone = done.count - added
             let skipped = items.filter { $0.state == .skipped }.count
-            statusLine = "Done — \(added) added\(skipped > 0 ? ", \(skipped) skipped" : "")."
+
+            var parts: [String] = []
+            if added > 0 { parts.append("\(added) added") }
+            if redone > 0 { parts.append("\(redone) re-transcribed") }
+            if skipped > 0 { parts.append("\(skipped) skipped") }
+            statusLine = parts.isEmpty ? "Done." : "Done — " + parts.joined(separator: ", ") + "."
         }
         scheduleAutoClearIfDone()
     }
@@ -185,6 +218,11 @@ final class Importer: ObservableObject {
     }
 
     private func process(index: Int) async {
+        if let entryID = items[index].reTranscribeEntryID {
+            await reprocess(index: index, entryID: entryID)
+            return
+        }
+
         let item = items[index]
         var copiedAudio: URL?
 
@@ -271,6 +309,80 @@ final class Importer: ObservableObject {
         } catch {
             items[index].state = .failed(error.localizedDescription)
             if let copiedAudio { try? FileManager.default.removeItem(at: copiedAudio) }
+        }
+    }
+
+    /// Re-transcribes an existing entry's stored audio and updates it in place.
+    /// Mirrors `process`'s transcribe → summarize steps, but keeps the entry's
+    /// identity (id, audio file, checksum, date) and overwrites only the derived
+    /// fields — segments, language, model, duration, title, summary — dropping any
+    /// manual transcript edit since the words come out fresh.
+    private func reprocess(index: Int, entryID: UUID) async {
+        let name = items[index].name
+
+        guard var entry = library.entries.first(where: { $0.id == entryID }) else {
+            items[index].state = .failed("Entry no longer exists")
+            return
+        }
+        let audio = library.audioURL(for: entry)
+        guard FileManager.default.fileExists(atPath: audio.path) else {
+            items[index].state = .failed("Audio file is missing")
+            return
+        }
+
+        do {
+            items[index].state = .transcribing
+            statusLine = "Re-transcribing \(name)…"
+            let result = try await transcriber.transcribe(url: audio)
+
+            if cancelledIDs.contains(items[index].id) {
+                throw Transcriber.TranscriberError.cancelled
+            }
+
+            let text = Self.cleanTranscript(result.segments.map(\.text).joined())
+            if text.isEmpty {
+                items[index].state = .failed("No speech detected")
+                statusLine = "No speech detected in \(name)."
+                return
+            }
+
+            items[index].state = .summarizing
+            statusLine = "Summarizing \(name)…"
+            let caption = await ollama.summarize(
+                text,
+                titlePrompt: settings.effectiveTitlePrompt,
+                summaryPrompt: settings.effectiveSummaryPrompt
+            )
+
+            if cancelledIDs.contains(items[index].id) {
+                throw Transcriber.TranscriberError.cancelled
+            }
+
+            var duration = result.segments.last?.end ?? 0
+            if duration == 0 {
+                duration = await Self.probeDuration(audio)
+            }
+
+            entry.segments = result.segments
+            entry.language = result.language
+            entry.model = transcriber.selectedVariant
+            entry.duration = duration
+            entry.text = nil                  // the fresh transcript supersedes any manual edit
+            entry.transcriptEdited = false
+            entry.title = caption.title
+            entry.summary = caption.summary
+            entry.summaryEdited = false
+            library.upsert(entry)
+
+            items[index].entryID = entry.id
+            items[index].state = .done
+            statusLine = "Re-transcribed: \(entry.title)"
+        } catch is CancellationError {
+            items[index].state = .cancelled
+        } catch let error as Transcriber.TranscriberError where error == .cancelled {
+            items[index].state = .cancelled
+        } catch {
+            items[index].state = .failed(error.localizedDescription)
         }
     }
 

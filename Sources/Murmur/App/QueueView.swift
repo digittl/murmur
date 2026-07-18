@@ -249,11 +249,12 @@ private struct QueueRow: View {
     }
 
     private var statusText: String {
+        let redo = item.reTranscribeEntryID != nil
         switch item.state {
         case .pending: return "Waiting…"
-        case .transcribing: return "Transcribing…"
+        case .transcribing: return redo ? "Re-transcribing…" : "Transcribing…"
         case .summarizing: return "Summarizing…"
-        case .done: return "Added"
+        case .done: return redo ? "Re-transcribed" : "Added"
         case .skipped: return "Duplicate — skipped"
         case .cancelled: return "Cancelled"
         case .failed(let why): return why

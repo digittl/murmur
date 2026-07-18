@@ -181,11 +181,19 @@ struct ContentView: View {
 
     // MARK: - Right column (recordings list)
 
-    private var recordingsList: some View {
-        let days = filterDay == nil
+    /// The entries currently on screen, in display order — respecting the day
+    /// filter. Drives shift-range selection and Select all.
+    private var visibleDays: [(day: Date, entries: [Entry])] {
+        filterDay == nil
             ? library.days
             : library.days.filter { Calendar.current.isDate($0.day, inSameDayAs: filterDay!) }
-        let ordered = days.flatMap(\.entries).map(\.id)   // display order, for shift-range
+    }
+
+    private var visibleIDs: [UUID] { visibleDays.flatMap(\.entries).map(\.id) }
+
+    private var recordingsList: some View {
+        let days = visibleDays
+        let ordered = visibleIDs   // display order, for shift-range
 
         return Group {
             if library.entries.isEmpty {
@@ -319,6 +327,12 @@ struct ContentView: View {
         } label: {
             Label(n > 1 ? "Regenerate \(n) summaries" : "Regenerate summary", systemImage: "text.alignleft")
         }
+        Divider()
+        Button {
+            reTranscribe(ids: targets)
+        } label: {
+            Label(n > 1 ? "Re-transcribe \(n) recordings" : "Re-transcribe", systemImage: "waveform.badge.magnifyingglass")
+        }
         if !selection.isEmpty {
             Button { selection.removeAll() } label: { Label("Clear selection", systemImage: "xmark.circle") }
         }
@@ -350,6 +364,14 @@ struct ContentView: View {
         }
     }
 
+    private func reTranscribe(ids: [UUID]) {
+        for id in ids {
+            if let entry = library.entries.first(where: { $0.id == id }) {
+                importer.reTranscribe(entry)
+            }
+        }
+    }
+
     private func confirmDelete() {
         for id in pendingDelete {
             if let entry = library.entries.first(where: { $0.id == id }) {
@@ -365,11 +387,12 @@ struct ContentView: View {
     /// A visible affordance to clear a multi-selection — the discoverable
     /// counterpart to Esc and the right-click "Clear selection" item.
     private var selectionBar: some View {
-        HStack {
+        let allSelected = !visibleIDs.isEmpty && selection.isSuperset(of: visibleIDs)
+        return HStack(spacing: 8) {
             Button {
                 withAnimation(.easeOut(duration: 0.15)) { selection.removeAll() }
             } label: {
-                HStack(spacing: 7) {
+                selectionPill {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.caption.weight(.semibold))
                     Text("\(selection.count) selected")
@@ -379,23 +402,43 @@ struct ContentView: View {
                     Text("Clear")
                         .font(.subheadline.weight(.medium))
                 }
-                .foregroundStyle(settings.accent)
-                .padding(.leading, 12)
-                .padding(.trailing, 12)
-                .padding(.vertical, 7)
-                .background(
-                    Capsule().fill(settings.accent.opacity(0.13))
-                        .overlay(Capsule().strokeBorder(settings.accent.opacity(0.18)))
-                )
             }
             .buttonStyle(.plain)
             .help("Clear the selection")
+
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { selection.formUnion(visibleIDs) }
+            } label: {
+                selectionPill {
+                    Image(systemName: "checklist.checked")
+                        .font(.caption.weight(.semibold))
+                    Text("Select all")
+                        .font(.subheadline.weight(.medium))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(allSelected)
+            .opacity(allSelected ? 0.4 : 1)
+            .help("Select every recording shown")
+
             Spacer(minLength: 0)
         }
         .padding(.leading, 20)
         .padding(.trailing, 16)
         .padding(.top, 16)
         .padding(.bottom, filterDay == nil ? 8 : 0)
+    }
+
+    /// The shared accent capsule used by the selection-bar pills.
+    private func selectionPill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 7) { content() }
+            .foregroundStyle(settings.accent)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                Capsule().fill(settings.accent.opacity(0.13))
+                    .overlay(Capsule().strokeBorder(settings.accent.opacity(0.18)))
+            )
     }
 
     private func filterChip(_ day: Date) -> some View {

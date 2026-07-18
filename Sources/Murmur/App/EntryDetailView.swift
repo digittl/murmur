@@ -12,6 +12,7 @@ struct EntryDetailView: View {
     @EnvironmentObject private var library: Library
     @EnvironmentObject private var player: Player
     @EnvironmentObject private var ollama: OllamaService
+    @EnvironmentObject private var importer: Importer
     @EnvironmentObject private var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
 
@@ -28,6 +29,12 @@ struct EntryDetailView: View {
 
     private var audioURL: URL { library.audioURL(for: draft) }
     private var isCurrentAudio: Bool { player.loadedURL == audioURL }
+
+    /// The entry as it currently stands in the library. Diverges from `draft` only
+    /// when something outside this view changes it — notably a re-transcribe, whose
+    /// fresh transcript, title and summary we then pull into the draft.
+    private var stored: Entry? { library.entries.first { $0.id == entry.id } }
+    private var isReTranscribing: Bool { importer.isReTranscribing(entry.id) }
 
     private var proseBinding: Binding<String> {
         Binding(
@@ -54,6 +61,13 @@ struct EntryDetailView: View {
         }
         .navigationTitle(draft.title.isEmpty ? "Entry" : draft.title)
         .onAppear { player.load(audioURL) }
+        .onChange(of: stored) { _, latest in
+            // Our own edits round-trip draft → save → stored, so stored == draft
+            // after they land; a mismatch means an external change (re-transcribe).
+            if let latest, latest != draft {
+                draft = latest
+            }
+        }
         .toolbar { detailToolbar }
     }
 
@@ -147,6 +161,10 @@ struct EntryDetailView: View {
                 if draft.transcriptEdited {
                     Text("· edited").font(.caption).foregroundStyle(.tertiary)
                 }
+                if isReTranscribing {
+                    Text("· re-transcribing…").font(.caption).foregroundStyle(.tertiary)
+                    ProgressView().controlSize(.small)
+                }
             }
 
             TextField("Transcript", text: proseBinding, axis: .vertical)
@@ -165,6 +183,9 @@ struct EntryDetailView: View {
             Menu {
                 Button { regenerate(.title) } label: { Label("Regenerate title", systemImage: "textformat") }
                 Button { regenerate(.summary) } label: { Label("Regenerate summary", systemImage: "text.alignleft") }
+                Divider()
+                Button { importer.reTranscribe(draft) } label: { Label("Re-transcribe", systemImage: "waveform.badge.magnifyingglass") }
+                    .disabled(isReTranscribing)
             } label: {
                 Label("Regenerate", systemImage: "sparkles")
             }
