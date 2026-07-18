@@ -19,6 +19,10 @@ struct ContentView: View {
     @State private var path: [UUID] = []
     @State private var isTargetedForDrop = false
 
+    // The day whose section is currently scrolled up under the top of the feed —
+    // shown as a slim pinned bar. nil at the very top (the inline header is visible).
+    @State private var stickyDay: Date?
+
     // Multi-select in the feed: hover reveals a checkbox; shift-click extends a
     // range; right-clicking a selected row acts on the whole selection.
     @State private var selection: Set<UUID> = []
@@ -200,28 +204,39 @@ struct ContentView: View {
                 emptyState
             } else {
                 ScrollView {
-                    // Pin the day headings so the current day stays as a slim header
-                    // while you scroll — regardless of whether a selection is active.
-                    // When filtering to one day the chip already names it, so no
-                    // per-day heading (and nothing to pin).
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: filterDay == nil ? [.sectionHeaders] : []) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(days, id: \.day) { group in
-                            Section {
-                                ForEach(group.entries) { entry in
-                                    entryRow(entry, ordered: ordered)
-                                }
-                            } header: {
-                                if filterDay == nil {
-                                    dayHeader(group.day)
-                                }
+                            // The filter chip already names the day when filtering
+                            // to one, so the per-day heading would be redundant.
+                            if filterDay == nil {
+                                dayHeader(group.day)
+                                    .background(dayOffsetReporter(group.day))
+                            }
+                            ForEach(group.entries) { entry in
+                                entryRow(entry, ordered: ordered)
                             }
                         }
                     }
-                    .padding(.top, filterDay == nil ? 0 : 6)
+                    .padding(.top, filterDay == nil ? 14 : 6)
                     .padding(.bottom, 24)
                     .padding(.leading, 12)
                 }
                 .scrollContentBackground(.hidden)
+                .coordinateSpace(name: Self.feedSpace)
+                .onPreferenceChange(DayOffsetKey.self) { offsets in
+                    // Current day = the header that has scrolled up to (or past) the
+                    // top; nil when the first one is still below the top edge.
+                    let passed = offsets.filter { $0.value <= 4 }
+                    stickyDay = passed.max { $0.value < $1.value }?.key
+                }
+                // An overlay (not a safeAreaInset) so showing/hiding it never shifts
+                // the content — which would feed back into the offsets and flicker.
+                // Hidden during multi-select so it can't collide with the selection bar.
+                .overlay(alignment: .top) {
+                    if selection.isEmpty, filterDay == nil, let day = stickyDay {
+                        stickyDayBar(day)
+                    }
+                }
             }
         }
         .navigationTitle("Recordings")
@@ -260,15 +275,40 @@ struct ContentView: View {
             Text(Format.dayHeading(day))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(settings.accent)
+        }
+        .padding(.top, 22)
+        .padding(.bottom, 16)
+        .padding(.leading, 28)
+    }
+
+    static let feedSpace = "recordingsFeed"
+
+    /// Reports a day header's vertical position within the feed so `stickyDay` can
+    /// track which section is at the top.
+    private func dayOffsetReporter(_ day: Date) -> some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: DayOffsetKey.self,
+                value: [day: geo.frame(in: .named(Self.feedSpace)).minY]
+            )
+        }
+    }
+
+    /// The slim pinned bar showing the current day. Matches the inline day header
+    /// but on an opaque bar so rows scroll cleanly beneath it.
+    private func stickyDayBar(_ day: Date) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(settings.accent).frame(width: 6, height: 6)
+            Text(Format.dayHeading(day))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(settings.accent)
             Spacer(minLength: 0)
         }
-        .padding(.top, 14)
-        .padding(.bottom, 10)
         .padding(.leading, 28)
         .padding(.trailing, 16)
-        // Opaque so rows scroll cleanly under the pinned heading. Same colour as
-        // the window fill, so at rest it's invisible and only reads once pinned.
-        .background(WindowTint.solid(settings.accent))
+        .padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider().opacity(0.6) }
     }
 
     private func entryRow(_ entry: Entry, ordered: [UUID]) -> some View {
@@ -581,6 +621,15 @@ struct ContentView: View {
             }
             .padding(24)
             .allowsHitTesting(false)
+    }
+}
+
+/// Collects each day header's vertical offset within the feed (day → minY), so the
+/// list can tell which section is currently at the top and pin its label.
+private struct DayOffsetKey: PreferenceKey {
+    static let defaultValue: [Date: CGFloat] = [:]
+    static func reduce(value: inout [Date: CGFloat], nextValue: () -> [Date: CGFloat]) {
+        value.merge(nextValue()) { min($0, $1) }
     }
 }
 
