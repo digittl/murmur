@@ -224,11 +224,11 @@ struct EntryDetailView: View {
         Task {
             switch field {
             case .title:
-                if let title = await ollama.regenerateTitle(from: draft.prose, prompt: settings.effectiveTitlePrompt) {
+                if let title = await ollama.regenerateTitle(from: draft.prose, prompt: settings.effectiveTitlePrompt, persona: settings.authorPersona) {
                     draft.title = title
                 }
             case .summary:
-                if let summary = await ollama.regenerateSummary(from: draft.prose, prompt: settings.effectiveSummaryPrompt) {
+                if let summary = await ollama.regenerateSummary(from: draft.prose, prompt: settings.effectiveSummaryPrompt, persona: settings.authorPersona) {
                     draft.summary = summary
                 }
             }

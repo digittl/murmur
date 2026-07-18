@@ -206,10 +206,16 @@ final class Transcriber: ObservableObject {
         let variant = selectedVariant
 
         do {
-            state = .downloading(0)
+            // Already on disk → the download is a cache hit, so the wait is the CoreML
+            // load; show `.loading` up front rather than a download bar stuck at 0.
+            state = isInstalled(variant) ? .loading : .downloading(0)
             for engine in engines {
                 _ = try await engine.load(variant: variant) { fraction in
-                    Task { @MainActor in self.state = .downloading(fraction) }
+                    Task { @MainActor in
+                        // Track bytes while downloading; once they're here the slow part
+                        // is loading the model into memory — surface that as `.loading`.
+                        self.state = fraction < 1 ? .downloading(fraction) : .loading
+                    }
                 }
             }
             refreshInstalled()
