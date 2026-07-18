@@ -200,19 +200,24 @@ struct ContentView: View {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    // Pin the day headings so the current day stays as a slim header
+                    // while you scroll — regardless of whether a selection is active.
+                    // When filtering to one day the chip already names it, so no
+                    // per-day heading (and nothing to pin).
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: filterDay == nil ? [.sectionHeaders] : []) {
                         ForEach(days, id: \.day) { group in
-                            // The filter chip already names the day when filtering
-                            // to one, so the per-day heading would be redundant.
-                            if filterDay == nil {
-                                dayHeader(group.day)
-                            }
-                            ForEach(group.entries) { entry in
-                                entryRow(entry, ordered: ordered)
+                            Section {
+                                ForEach(group.entries) { entry in
+                                    entryRow(entry, ordered: ordered)
+                                }
+                            } header: {
+                                if filterDay == nil {
+                                    dayHeader(group.day)
+                                }
                             }
                         }
                     }
-                    .padding(.top, filterDay == nil ? 14 : 6)
+                    .padding(.top, filterDay == nil ? 0 : 6)
                     .padding(.bottom, 24)
                     .padding(.leading, 12)
                 }
@@ -255,10 +260,15 @@ struct ContentView: View {
             Text(Format.dayHeading(day))
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(settings.accent)
+            Spacer(minLength: 0)
         }
-        .padding(.top, 22)
-        .padding(.bottom, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
         .padding(.leading, 28)
+        .padding(.trailing, 16)
+        // Opaque so rows scroll cleanly under the pinned heading. Same colour as
+        // the window fill, so at rest it's invisible and only reads once pinned.
+        .background(WindowTint.solid(settings.accent))
     }
 
     private func entryRow(_ entry: Entry, ordered: [UUID]) -> some View {

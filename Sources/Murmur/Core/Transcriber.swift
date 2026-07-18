@@ -12,7 +12,6 @@ final class CancelToken: @unchecked Sendable {
         return cancelled
     }
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
-    func reset() { lock.lock(); cancelled = false; lock.unlock() }
 }
 
 /// Holds the WhisperKit instance in a non-isolated context so its non-Sendable
@@ -226,10 +225,10 @@ final class Transcriber: ObservableObject {
     }
 
     /// Transcribes one audio file on the given worker's engine. Callers pass a
-    /// `CancelToken` they own so a single file can be aborted independently of the
-    /// other worker. Assumes `prepare()` succeeded. `worker` must be in range.
+    /// fresh, single-use `CancelToken` they own so a file can be aborted (and stay
+    /// aborted) independently of the other worker. Assumes `prepare()` succeeded.
+    /// `worker` must be in range.
     func transcribe(url: URL, worker: Int, cancel: CancelToken) async throws -> Result {
-        cancel.reset()
         let (segments, language) = try await engines[worker].run(path: url.path, cancel: cancel)
         return Result(segments: segments, language: language)
     }

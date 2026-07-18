@@ -8,7 +8,7 @@ import AVFoundation
 /// resume and cancel (which aborts the in-flight file too). iOS-safe.
 @MainActor
 final class Importer: ObservableObject {
-    static let audioExtensions: Set<String> = ["m4a", "mp3", "wav", "aac", "caf", "aiff", "aif", "flac", "ogg"]
+    nonisolated static let audioExtensions: Set<String> = ["m4a", "mp3", "wav", "aac", "caf", "aiff", "aif", "flac", "ogg"]
 
     enum ItemState: Equatable {
         case pending, transcribing, summarizing, done, skipped, cancelled
@@ -77,8 +77,21 @@ final class Importer: ObservableObject {
     /// Adds files (folders walked recursively). Starts the worker if idle; if
     /// paused, the files simply wait until resumed.
     func enqueue(urls: [URL]) {
+        Task { await ingest(urls: urls) }
+    }
+
+    /// Walks the dropped tree off the main actor — a big folder can hang the UI for
+    /// a beat otherwise (the "beach ball" on a first drag) — then appends the new
+    /// files back on the main actor.
+    private func ingest(urls: [URL]) async {
+        let collected = await Task.detached(priority: .userInitiated) {
+            Self.collectAudioFiles(from: urls)
+        }.value
+        // Snapshot the existing URLs AFTER the walk (and with no `await` before the
+        // append below) so two overlapping drops can't both clear a stale snapshot
+        // and queue the same file twice.
         let existing = Set(items.map(\.url))
-        let files = collectAudioFiles(from: urls)
+        let files = collected
             .filter { !existing.contains($0) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
 
@@ -89,9 +102,7 @@ final class Importer: ObservableObject {
         autoClearTask?.cancel()   // new work arrived; don't clear out from under it
         items.append(contentsOf: files.map { Item(url: $0, name: $0.lastPathComponent) })
 
-        if runState == .idle {
-            startWorker()
-        }
+        ensureRunning()
     }
 
     /// Re-runs transcription (and re-captioning) on an entry that's already in the
@@ -107,9 +118,7 @@ final class Importer: ObservableObject {
         let label = entry.title.isEmpty ? entry.originalName : entry.title
         items.append(Item(url: library.audioURL(for: entry), name: label, reTranscribeEntryID: entry.id))
 
-        if runState == .idle {
-            startWorker()
-        }
+        ensureRunning()
     }
 
     /// True while a re-transcribe of this entry is queued or running.
@@ -126,21 +135,25 @@ final class Importer: ObservableObject {
     }
 
     func resume() {
-        if runState == .paused {
-            startWorker()
+        guard runState == .paused else {
+            return
         }
+        runState = .idle   // ensureRunning starts a fresh drain (now, or when the old one finishes)
+        ensureRunning()
     }
 
     /// Stops everything, aborting every in-flight file, and marks the rest cancelled.
+    /// `worker` is deliberately left set — the running drain clears it in its `defer`
+    /// once its workers have fully exited, which is what guarantees a re-import can't
+    /// start a second drain that shares the same WhisperKit engines.
     func cancelAll() {
         for token in tokens.values {
             token.cancel()
         }
         for task in workerTasks {
-            task.cancel()   // so a quick re-import can't resurrect these loops via runState
+            task.cancel()
         }
         worker?.cancel()
-        worker = nil
         for i in items.indices where !items[i].state.isFinished {
             items[i].state = .cancelled
         }
@@ -170,21 +183,52 @@ final class Importer: ObservableObject {
 
     // MARK: - Worker
 
-    private func startWorker() {
-        guard worker == nil else {
+    /// Starts the drain if one isn't already running, there's pending work, and
+    /// we're not paused. The single-drain invariant (only ever one live `worker`)
+    /// is what keeps two drains from sharing the WhisperKit engines.
+    private func ensureRunning() {
+        guard worker == nil, runState != .paused,
+              items.contains(where: { $0.state.isPending }) else {
             return
         }
         runState = .running
         worker = Task { await drain() }
     }
 
+    /// Mutates the item with this id, if it still exists. Workers key off ids, not
+    /// array indices, so a `clearFinished()` (or any removal) that shifts the array
+    /// mid-flight can't make a worker write to the wrong slot or trap out of bounds.
+    private func update(_ id: UUID, _ mutate: (inout Item) -> Void) {
+        if let idx = items.firstIndex(where: { $0.id == id }) {
+            mutate(&items[idx])
+        }
+    }
+
     private func drain() async {
+        // The drain owns `worker`'s lifetime: only it clears the handle, and only
+        // once its workers have fully exited — then it re-arms for anything that
+        // was enqueued while it was finishing. This is the single-drain guarantee.
+        // Re-arm is suppressed only on a model-load failure, where the pending items
+        // would otherwise spin us straight back into the same failing prepare().
+        var rearm = true
+        defer {
+            worker = nil
+            scheduleAutoClearIfDone()
+            if rearm {
+                ensureRunning()
+            }
+        }
+
         statusLine = "Preparing \(transcriber.selectedVariant) model…"
         await transcriber.prepare()
         if case .failed(let message) = transcriber.state {
             statusLine = "Model failed to load: \(message)"
-            worker = nil
             runState = .idle
+            rearm = false
+            return
+        }
+        // Cancelled or paused while the model was loading — don't spawn workers.
+        guard !Task.isCancelled, runState == .running else {
             return
         }
 
@@ -202,7 +246,6 @@ final class Importer: ObservableObject {
         }
         workerTasks = []
 
-        worker = nil
         if runState == .running {
             runState = .idle
             let done = items.filter { $0.state == .done }
@@ -216,7 +259,6 @@ final class Importer: ObservableObject {
             if skipped > 0 { parts.append("\(skipped) skipped") }
             statusLine = parts.isEmpty ? "Done." : "Done — " + parts.joined(separator: ", ") + "."
         }
-        scheduleAutoClearIfDone()
     }
 
     /// One worker's loop: claim the next pending file and process it, until none
@@ -228,7 +270,8 @@ final class Importer: ObservableObject {
                 return
             }
             items[idx].state = .transcribing   // claim before any suspension point
-            await process(index: idx, worker: worker)
+            let item = items[idx]              // immutable snapshot; state is mutated by id from here
+            await process(item, worker: worker)
         }
     }
 
@@ -250,26 +293,24 @@ final class Importer: ObservableObject {
         }
     }
 
-    private func process(index: Int, worker: Int) async {
-        let itemID = items[index].id
+    private func process(_ item: Item, worker: Int) async {
         let token = CancelToken()
-        tokens[itemID] = token
-        defer { tokens[itemID] = nil }
+        tokens[item.id] = token
+        defer { tokens[item.id] = nil }
 
-        if let entryID = items[index].reTranscribeEntryID {
-            await reprocess(index: index, entryID: entryID, worker: worker, token: token)
+        if let entryID = item.reTranscribeEntryID {
+            await reprocess(item, entryID: entryID, worker: worker, token: token)
             return
         }
 
-        let item = items[index]
         var copiedAudio: URL?
 
         guard let checksum = Library.checksum(of: item.url) else {
-            items[index].state = .failed("Couldn't read file")
+            update(item.id) { $0.state = .failed("Couldn't read file") }
             return
         }
         if library.hasChecksum(checksum) || inFlightChecksums.contains(checksum) {
-            items[index].state = .skipped
+            update(item.id) { $0.state = .skipped }
             statusLine = "Skipped duplicate: \(item.name)"
             return
         }
@@ -285,7 +326,7 @@ final class Importer: ObservableObject {
             try FileManager.default.copyItem(at: item.url, to: dest)
             copiedAudio = dest
 
-            items[index].state = .transcribing
+            update(item.id) { $0.state = .transcribing }
             statusLine = "Transcribing \(item.name)…"
             let result = try await transcriber.transcribe(url: dest, worker: worker, cancel: token)
 
@@ -297,13 +338,13 @@ final class Importer: ObservableObject {
             // rather than empty text. Don't invent a captioned entry for it.
             let text = Self.cleanTranscript(result.segments.map(\.text).joined())
             if text.isEmpty {
-                items[index].state = .failed("No speech detected")
+                update(item.id) { $0.state = .failed("No speech detected") }
                 if let copiedAudio { try? FileManager.default.removeItem(at: copiedAudio) }
                 statusLine = "No speech detected in \(item.name)."
                 return
             }
 
-            items[index].state = .summarizing
+            update(item.id) { $0.state = .summarizing }
             statusLine = "Summarizing \(item.name)…"
             let caption = await ollama.summarize(
                 text,
@@ -337,17 +378,16 @@ final class Importer: ObservableObject {
                 language: result.language
             )
             library.upsert(entry)
-            items[index].entryID = entry.id
-            items[index].state = .done
+            update(item.id) { $0.entryID = entry.id; $0.state = .done }
             statusLine = "Added: \(entry.title)"
         } catch is CancellationError {
-            items[index].state = .cancelled
+            update(item.id) { $0.state = .cancelled }
             if let copiedAudio { try? FileManager.default.removeItem(at: copiedAudio) }
         } catch let error as Transcriber.TranscriberError where error == .cancelled {
-            items[index].state = .cancelled
+            update(item.id) { $0.state = .cancelled }
             if let copiedAudio { try? FileManager.default.removeItem(at: copiedAudio) }
         } catch {
-            items[index].state = .failed(error.localizedDescription)
+            update(item.id) { $0.state = .failed(error.localizedDescription) }
             if let copiedAudio { try? FileManager.default.removeItem(at: copiedAudio) }
         }
     }
@@ -357,36 +397,36 @@ final class Importer: ObservableObject {
     /// identity (id, audio file, checksum, date) and overwrites only the derived
     /// fields — segments, language, model, duration, title, summary — dropping any
     /// manual transcript edit since the words come out fresh.
-    private func reprocess(index: Int, entryID: UUID, worker: Int, token: CancelToken) async {
-        let name = items[index].name
+    private func reprocess(_ item: Item, entryID: UUID, worker: Int, token: CancelToken) async {
+        let name = item.name
 
         guard var entry = library.entries.first(where: { $0.id == entryID }) else {
-            items[index].state = .failed("Entry no longer exists")
+            update(item.id) { $0.state = .failed("Entry no longer exists") }
             return
         }
         let audio = library.audioURL(for: entry)
         guard FileManager.default.fileExists(atPath: audio.path) else {
-            items[index].state = .failed("Audio file is missing")
+            update(item.id) { $0.state = .failed("Audio file is missing") }
             return
         }
 
         do {
-            items[index].state = .transcribing
+            update(item.id) { $0.state = .transcribing }
             statusLine = "Re-transcribing \(name)…"
             let result = try await transcriber.transcribe(url: audio, worker: worker, cancel: token)
 
-            if cancelledIDs.contains(items[index].id) {
+            if cancelledIDs.contains(item.id) {
                 throw Transcriber.TranscriberError.cancelled
             }
 
             let text = Self.cleanTranscript(result.segments.map(\.text).joined())
             if text.isEmpty {
-                items[index].state = .failed("No speech detected")
+                update(item.id) { $0.state = .failed("No speech detected") }
                 statusLine = "No speech detected in \(name)."
                 return
             }
 
-            items[index].state = .summarizing
+            update(item.id) { $0.state = .summarizing }
             statusLine = "Summarizing \(name)…"
             let caption = await ollama.summarize(
                 text,
@@ -394,7 +434,7 @@ final class Importer: ObservableObject {
                 summaryPrompt: settings.effectiveSummaryPrompt
             )
 
-            if cancelledIDs.contains(items[index].id) {
+            if cancelledIDs.contains(item.id) {
                 throw Transcriber.TranscriberError.cancelled
             }
 
@@ -414,21 +454,20 @@ final class Importer: ObservableObject {
             entry.summaryEdited = false
             library.upsert(entry)
 
-            items[index].entryID = entry.id
-            items[index].state = .done
+            update(item.id) { $0.entryID = entry.id; $0.state = .done }
             statusLine = "Re-transcribed: \(entry.title)"
         } catch is CancellationError {
-            items[index].state = .cancelled
+            update(item.id) { $0.state = .cancelled }
         } catch let error as Transcriber.TranscriberError where error == .cancelled {
-            items[index].state = .cancelled
+            update(item.id) { $0.state = .cancelled }
         } catch {
-            items[index].state = .failed(error.localizedDescription)
+            update(item.id) { $0.state = .failed(error.localizedDescription) }
         }
     }
 
     // MARK: - File helpers
 
-    private func collectAudioFiles(from urls: [URL]) -> [URL] {
+    nonisolated private static func collectAudioFiles(from urls: [URL]) -> [URL] {
         var out: [URL] = []
         let fm = FileManager.default
 
