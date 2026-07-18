@@ -22,6 +22,9 @@ struct ContentView: View {
     // The day whose section is currently scrolled up under the top of the feed —
     // shown as a slim pinned bar. nil at the very top (the inline header is visible).
     @State private var stickyDay: Date?
+    // Height of the selection/filter bar, so the pinned day bar can sit just below
+    // it (rather than being hidden) when a selection or day filter is active.
+    @State private var topInsetHeight: CGFloat = 0
 
     // Multi-select in the feed: hover reveals a checkbox; shift-click extends a
     // range; right-clicking a selected row acts on the whole selection.
@@ -234,10 +237,12 @@ struct ContentView: View {
                 }
                 // An overlay (not a safeAreaInset) so showing/hiding it never shifts
                 // the content — which would feed back into the offsets and flicker.
-                // Hidden during multi-select so it can't collide with the selection bar.
+                // Offset below the selection/filter bar (topInsetHeight) so it sits
+                // beneath it rather than colliding, and still shows during selection.
                 .overlay(alignment: .top) {
-                    if selection.isEmpty, filterDay == nil, let day = stickyDay {
+                    if filterDay == nil, let day = stickyDay {
                         stickyDayBar(day)
+                            .padding(.top, topInsetHeight)
                     }
                 }
             }
@@ -257,8 +262,12 @@ struct ContentView: View {
                 .overlay(alignment: .bottom) {
                     Divider().opacity(0.6)
                 }
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: TopInsetHeightKey.self, value: geo.size.height)
+                })
             }
         }
+        .onPreferenceChange(TopInsetHeightKey.self) { topInsetHeight = $0 }
         .onExitCommand { selection.removeAll() }   // Esc clears the selection
         .confirmationDialog(
             pendingDelete.count > 1 ? "Delete \(pendingDelete.count) recordings?" : "Delete this recording?",
@@ -308,7 +317,9 @@ struct ContentView: View {
                 .foregroundStyle(settings.accent)
             Spacer(minLength: 0)
         }
-        .padding(.leading, 28)
+        // 40 = the LazyVStack's leading 12 + the inline day header's leading 28, so
+        // the pinned dot/label line up horizontally with the inline day headings.
+        .padding(.leading, 40)
         .padding(.trailing, 16)
         .padding(.vertical, 10)
         .background(.bar)
@@ -639,6 +650,15 @@ private struct DayScanKey: PreferenceKey {
     static let defaultValue: [DayScanItem] = []
     static func reduce(value: inout [DayScanItem], nextValue: () -> [DayScanItem]) {
         value.append(contentsOf: nextValue())
+    }
+}
+
+/// The measured height of the selection/filter bar, so the pinned day bar can be
+/// offset to sit directly beneath it.
+private struct TopInsetHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
