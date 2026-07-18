@@ -68,9 +68,17 @@ final class OllamaService: ObservableObject {
     private let port = 11434
     private var baseURL: URL { URL(string: "http://\(host):\(port)")! }
 
+    /// Last-known set of downloaded model tags, persisted so onboarding can tell a
+    /// genuinely-fresh machine (no models) from a normal launch where the Ollama
+    /// server just hasn't answered yet. Refreshed to live truth once it does.
+    private static let installedCacheKey = "MurmurInstalledLLMs"
+
     init() {
-        activeTag = UserDefaults.standard.string(forKey: "MurmurLLM") ?? Self.fast.tag
+        activeTag = UserDefaults.standard.string(forKey: "MurmurLLM") ?? Self.best.tag
         assistantTag = UserDefaults.standard.string(forKey: "MurmurAssistantLLM") ?? Self.assistantDeep.tag
+        if let cached = UserDefaults.standard.stringArray(forKey: Self.installedCacheKey) {
+            installed = Set(cached)
+        }
     }
 
     var activeModel: LLMModel { Self.catalog.first { $0.tag == activeTag } ?? Self.fast }
@@ -167,6 +175,7 @@ final class OllamaService: ObservableObject {
             return
         }
         installed = Set(tags.models.map(\.name))
+        UserDefaults.standard.set(Array(installed), forKey: Self.installedCacheKey)
     }
 
     /// Downloads a model, streaming progress into `pulls[tag]`.

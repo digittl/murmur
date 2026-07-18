@@ -29,6 +29,7 @@ struct OnboardingView: View {
                         note: model.note,
                         selected: transcriber.selectedVariant == model.variant,
                         installed: transcriber.isInstalled(model.variant),
+                        recommended: model.variant == Transcriber.defaultVariant,
                         progress: transcriber.downloads[model.variant]
                     ) { transcriber.selectedVariant = model.variant }
                 }
@@ -45,6 +46,7 @@ struct OnboardingView: View {
                         note: model.note,
                         selected: ollama.activeTag == model.tag,
                         installed: ollama.isInstalled(model.tag),
+                        recommended: model.tag == OllamaService.best.tag,
                         progress: pullFraction(model.tag)
                     ) { ollama.activeTag = model.tag }
                 }
@@ -61,6 +63,7 @@ struct OnboardingView: View {
                         note: model.note,
                         selected: ollama.assistantTag == model.tag,
                         installed: ollama.isInstalled(model.tag),
+                        recommended: model.tag == OllamaService.assistantDeep.tag,
                         progress: pullFraction(model.tag)
                     ) { ollama.assistantTag = model.tag }
                 }
@@ -189,6 +192,7 @@ private struct ChoiceRow: View {
     let note: String
     let selected: Bool
     let installed: Bool
+    var recommended: Bool = false
     let progress: Double?
     let onTap: () -> Void
 
@@ -199,7 +203,12 @@ private struct ChoiceRow: View {
                     .foregroundStyle(selected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.body.weight(.medium))
+                    HStack(spacing: 7) {
+                        Text(title).font(.body.weight(.medium))
+                        if recommended {
+                            RecommendedBadge()
+                        }
+                    }
                     Text(note).font(.caption).foregroundStyle(.secondary)
                     if let progress {
                         ProgressView(value: progress).controlSize(.small)
@@ -222,5 +231,19 @@ private struct ChoiceRow: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// A small accent chip flagging the best default pick in a model list.
+private struct RecommendedBadge: View {
+    var body: some View {
+        Text("RECOMMENDED")
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.5)
+            .foregroundStyle(.tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(.tint.opacity(0.15)))
+            .overlay(Capsule().strokeBorder(.tint.opacity(0.3), lineWidth: 0.5))
     }
 }

@@ -146,10 +146,16 @@ final class Transcriber: ObservableObject {
     @Published private(set) var installed: Set<String> = []
     @Published private(set) var downloads: [String: Double] = [:]   // variant -> fraction while downloading
 
-    private let engine = WhisperEngine()
-    private let cancelToken = CancelToken()
+    /// How many files transcribe in parallel. Each worker keeps its own loaded
+    /// WhisperKit instance (WhisperKit can't share one model across concurrent
+    /// files), so this multiplies model memory — 2 is a deliberate speed/RAM
+    /// trade for the import queue.
+    let workerCount = 2
+
+    private let engines: [WhisperEngine]
 
     init() {
+        engines = (0..<workerCount).map { _ in WhisperEngine() }
         refreshInstalled()
     }
 
@@ -168,17 +174,12 @@ final class Transcriber: ObservableObject {
         installed = found
     }
 
-    /// Aborts the file currently being transcribed, if any.
-    func cancelCurrent() {
-        cancelToken.cancel()
-    }
-
     /// Explicitly downloads a model (the Settings "Download" button).
     func download(_ variant: String) async {
         guard downloads[variant] == nil else { return }
         downloads[variant] = 0
         do {
-            _ = try await engine.prefetch(variant: variant) { fraction in
+            _ = try await engines[0].prefetch(variant: variant) { fraction in
                 Task { @MainActor in self.downloads[variant] = fraction }
             }
         } catch {
@@ -191,20 +192,26 @@ final class Transcriber: ObservableObject {
     /// Deletes a downloaded model's files. Refuses to delete the active model.
     func delete(_ variant: String) async {
         guard variant != selectedVariant, let url = Self.folderURL(for: variant) else { return }
-        engine.unloadIfLoaded(variant)
+        for engine in engines {
+            engine.unloadIfLoaded(variant)
+        }
         try? FileManager.default.removeItem(at: url)
         refreshInstalled()
     }
 
-    /// Ensures the selected model is downloaded and loaded. Cheap to call repeatedly.
+    /// Ensures the selected model is downloaded and loaded into every worker's
+    /// engine. Cheap to call repeatedly. Engines load sequentially so the shared
+    /// download runs once (the rest hit the cache) and two big loads never race.
     func prepare() async {
         UserDefaults.standard.set(selectedVariant, forKey: "MurmurModel")
         let variant = selectedVariant
 
         do {
             state = .downloading(0)
-            _ = try await engine.load(variant: variant) { fraction in
-                Task { @MainActor in self.state = .downloading(fraction) }
+            for engine in engines {
+                _ = try await engine.load(variant: variant) { fraction in
+                    Task { @MainActor in self.state = .downloading(fraction) }
+                }
             }
             refreshInstalled()
             state = .ready
@@ -218,10 +225,12 @@ final class Transcriber: ObservableObject {
         var language: String?
     }
 
-    /// Transcribes one audio file into ordered segments. Assumes `prepare()` succeeded.
-    func transcribe(url: URL) async throws -> Result {
-        cancelToken.reset()
-        let (segments, language) = try await engine.run(path: url.path, cancel: cancelToken)
+    /// Transcribes one audio file on the given worker's engine. Callers pass a
+    /// `CancelToken` they own so a single file can be aborted independently of the
+    /// other worker. Assumes `prepare()` succeeded. `worker` must be in range.
+    func transcribe(url: URL, worker: Int, cancel: CancelToken) async throws -> Result {
+        cancel.reset()
+        let (segments, language) = try await engines[worker].run(path: url.path, cancel: cancel)
         return Result(segments: segments, language: language)
     }
 

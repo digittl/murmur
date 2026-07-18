@@ -46,8 +46,16 @@ final class Importer: ObservableObject {
     private let ollama: OllamaService
     private let settings: AppSettings
     private var worker: Task<Void, Never>?
+    private var workerTasks: [Task<Void, Never>] = []
     private var cancelledIDs: Set<UUID> = []
     private var autoClearTask: Task<Void, Never>?
+    // One cancel token per in-flight item, so a single file can be aborted (and
+    // the whole queue cancelled) across the parallel workers.
+    private var tokens: [UUID: CancelToken] = [:]
+    // Checksums claimed by an in-flight import. With parallel workers, two copies
+    // of the same audio can clear the library dedupe before either is saved; this
+    // reserves the checksum synchronously so the second copy still skips.
+    private var inFlightChecksums: Set<String> = []
 
     init(library: Library, transcriber: Transcriber, ollama: OllamaService, settings: AppSettings) {
         self.library = library
@@ -123,9 +131,14 @@ final class Importer: ObservableObject {
         }
     }
 
-    /// Stops everything, aborting the in-flight file, and marks the rest cancelled.
+    /// Stops everything, aborting every in-flight file, and marks the rest cancelled.
     func cancelAll() {
-        transcriber.cancelCurrent()
+        for token in tokens.values {
+            token.cancel()
+        }
+        for task in workerTasks {
+            task.cancel()   // so a quick re-import can't resurrect these loops via runState
+        }
         worker?.cancel()
         worker = nil
         for i in items.indices where !items[i].state.isFinished {
@@ -151,9 +164,7 @@ final class Importer: ObservableObject {
             return
         }
         cancelledIDs.insert(id)
-        if items[idx].state.isActive {
-            transcriber.cancelCurrent()   // aborts WhisperKit mid-file if it's transcribing
-        }
+        tokens[id]?.cancel()   // aborts this file's WhisperKit run mid-transcription
         items[idx].state = .cancelled
     }
 
@@ -177,10 +188,19 @@ final class Importer: ObservableObject {
             return
         }
 
-        while !Task.isCancelled, runState == .running,
-              let idx = items.firstIndex(where: { $0.state.isPending }) {
-            await process(index: idx)
+        // Fan out one loop per worker. Each pulls the next pending file, transcribes
+        // it on its own engine, then captions it — so two files transcribe at once
+        // and one can be captioning (Ollama) while the other still transcribes. The
+        // loops share the main actor and interleave at each `await`, while the heavy
+        // WhisperKit work runs off-actor on distinct engines — real parallelism.
+        let workers = (0..<transcriber.workerCount).map { w in
+            Task { @MainActor in await self.runWorker(w) }
         }
+        workerTasks = workers
+        for task in workers {
+            await task.value
+        }
+        workerTasks = []
 
         worker = nil
         if runState == .running {
@@ -197,6 +217,19 @@ final class Importer: ObservableObject {
             statusLine = parts.isEmpty ? "Done." : "Done — " + parts.joined(separator: ", ") + "."
         }
         scheduleAutoClearIfDone()
+    }
+
+    /// One worker's loop: claim the next pending file and process it, until none
+    /// remain. Claiming is a synchronous find-and-mark (no `await` between the two)
+    /// so the two workers running on the main actor can never grab the same file.
+    private func runWorker(_ worker: Int) async {
+        while !Task.isCancelled, runState == .running {
+            guard let idx = items.firstIndex(where: { $0.state.isPending }) else {
+                return
+            }
+            items[idx].state = .transcribing   // claim before any suspension point
+            await process(index: idx, worker: worker)
+        }
     }
 
     /// Once the queue is idle and every item has finished, clear it after a short
@@ -217,9 +250,14 @@ final class Importer: ObservableObject {
         }
     }
 
-    private func process(index: Int) async {
+    private func process(index: Int, worker: Int) async {
+        let itemID = items[index].id
+        let token = CancelToken()
+        tokens[itemID] = token
+        defer { tokens[itemID] = nil }
+
         if let entryID = items[index].reTranscribeEntryID {
-            await reprocess(index: index, entryID: entryID)
+            await reprocess(index: index, entryID: entryID, worker: worker, token: token)
             return
         }
 
@@ -230,11 +268,13 @@ final class Importer: ObservableObject {
             items[index].state = .failed("Couldn't read file")
             return
         }
-        if library.hasChecksum(checksum) {
+        if library.hasChecksum(checksum) || inFlightChecksums.contains(checksum) {
             items[index].state = .skipped
             statusLine = "Skipped duplicate: \(item.name)"
             return
         }
+        inFlightChecksums.insert(checksum)   // reserve synchronously; the other worker will now skip a dup
+        defer { inFlightChecksums.remove(checksum) }
 
         do {
             let id = UUID()
@@ -247,7 +287,7 @@ final class Importer: ObservableObject {
 
             items[index].state = .transcribing
             statusLine = "Transcribing \(item.name)…"
-            let result = try await transcriber.transcribe(url: dest)
+            let result = try await transcriber.transcribe(url: dest, worker: worker, cancel: token)
 
             if cancelledIDs.contains(item.id) {
                 throw Transcriber.TranscriberError.cancelled
@@ -317,7 +357,7 @@ final class Importer: ObservableObject {
     /// identity (id, audio file, checksum, date) and overwrites only the derived
     /// fields — segments, language, model, duration, title, summary — dropping any
     /// manual transcript edit since the words come out fresh.
-    private func reprocess(index: Int, entryID: UUID) async {
+    private func reprocess(index: Int, entryID: UUID, worker: Int, token: CancelToken) async {
         let name = items[index].name
 
         guard var entry = library.entries.first(where: { $0.id == entryID }) else {
@@ -333,7 +373,7 @@ final class Importer: ObservableObject {
         do {
             items[index].state = .transcribing
             statusLine = "Re-transcribing \(name)…"
-            let result = try await transcriber.transcribe(url: audio)
+            let result = try await transcriber.transcribe(url: audio, worker: worker, cancel: token)
 
             if cancelledIDs.contains(items[index].id) {
                 throw Transcriber.TranscriberError.cancelled

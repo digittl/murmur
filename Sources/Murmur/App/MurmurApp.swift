@@ -115,14 +115,18 @@ struct RootView: View {
 
     @State private var startupChecked = false
 
+    // Onboarding is about whether the models are *downloaded and chosen*, not
+    // whether the Ollama server happens to be answering this instant — a slow or
+    // failed probe must not resurrect the welcome screen for a set-up machine.
+    // The captioning/chat code paths guard on live server state separately.
     private var transcriptionReady: Bool {
         transcriber.isInstalled(transcriber.selectedVariant)
     }
     private var captionReady: Bool {
-        ollama.serverState == .ready && ollama.isInstalled(ollama.activeTag)
+        ollama.isInstalled(ollama.activeTag)
     }
     private var assistantReady: Bool {
-        ollama.serverState == .ready && ollama.isInstalled(ollama.assistantTag)
+        ollama.isInstalled(ollama.assistantTag)
     }
     private var needsOnboarding: Bool {
         !transcriptionReady || !captionReady || !assistantReady

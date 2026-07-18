@@ -221,12 +221,18 @@ struct ContentView: View {
         }
         .navigationTitle("Recordings")
         .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                if !selection.isEmpty {
-                    selectionBar
+            if !selection.isEmpty || filterDay != nil {
+                VStack(spacing: 0) {
+                    if !selection.isEmpty {
+                        selectionBar
+                    }
+                    if let day = filterDay {
+                        filterChip(day)
+                    }
                 }
-                if let day = filterDay {
-                    filterChip(day)
+                .background(.bar)   // opaque header layer so rows scroll cleanly under it
+                .overlay(alignment: .bottom) {
+                    Divider().opacity(0.6)
                 }
             }
         }
@@ -425,8 +431,8 @@ struct ContentView: View {
         }
         .padding(.leading, 20)
         .padding(.trailing, 16)
-        .padding(.top, 16)
-        .padding(.bottom, filterDay == nil ? 8 : 0)
+        .padding(.top, 10)
+        .padding(.bottom, filterDay == nil ? 10 : 6)
     }
 
     /// The shared accent capsule used by the selection-bar pills.
