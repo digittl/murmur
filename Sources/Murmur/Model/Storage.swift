@@ -38,6 +38,10 @@ enum Storage {
     /// Where "Ask your journal" chat history is persisted (one JSON file).
     static var chatsFile: URL { root.appendingPathComponent("chats.json") }
 
+    /// Tombstones: checksums of deleted recordings, so re-importing the same audio
+    /// doesn't bring a deliberately-deleted entry back.
+    static var deletedFile: URL { root.appendingPathComponent("deleted.json") }
+
     /// Creates the library folders if they don't exist yet.
     static func ensureDirectories() throws {
         for dir in [root, audioDir, entriesDir] {

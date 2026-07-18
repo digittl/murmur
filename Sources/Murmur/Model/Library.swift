@@ -9,6 +9,9 @@ final class Library: ObservableObject {
     @Published private(set) var entries: [Entry] = []
 
     private var checksums: Set<String> = []
+    // Checksums of deleted recordings, persisted so a re-import can't resurrect
+    // something the user deliberately removed (see `wasDeleted`).
+    private var deletedChecksums: Set<String> = []
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -48,10 +51,20 @@ final class Library: ObservableObject {
         loaded.sort { $0.date > $1.date }
         entries = loaded
         checksums = Set(loaded.map(\.checksum))
+
+        if let data = try? Data(contentsOf: Storage.deletedFile),
+           let list = try? decoder.decode([String].self, from: data) {
+            deletedChecksums = Set(list)
+        }
     }
 
     func hasChecksum(_ checksum: String) -> Bool {
         checksums.contains(checksum)
+    }
+
+    /// True if this audio was previously deleted — reimporting it should skip.
+    func wasDeleted(_ checksum: String) -> Bool {
+        deletedChecksums.contains(checksum)
     }
 
     /// Inserts or updates an entry both in memory and on disk.
@@ -70,8 +83,19 @@ final class Library: ObservableObject {
         entries.removeAll { $0.id == entry.id }
         checksums.remove(entry.checksum)
 
+        // Tombstone the checksum so a later re-import doesn't bring it back.
+        deletedChecksums.insert(entry.checksum)
+        persistDeleted()
+
         try? FileManager.default.removeItem(at: jsonURL(for: entry))
         try? FileManager.default.removeItem(at: Storage.audioDir.appendingPathComponent(entry.audioFileName))
+    }
+
+    private func persistDeleted() {
+        guard let data = try? encoder.encode(Array(deletedChecksums)) else {
+            return
+        }
+        try? data.write(to: Storage.deletedFile, options: .atomic)
     }
 
     func audioURL(for entry: Entry) -> URL {

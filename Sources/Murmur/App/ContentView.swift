@@ -19,10 +19,6 @@ struct ContentView: View {
     @State private var path: [UUID] = []
     @State private var isTargetedForDrop = false
 
-    // The day whose section is currently scrolled up under the top of the feed —
-    // shown as a slim pinned bar. nil at the very top (the inline header is visible).
-    @State private var stickyDay: Date?
-
     // Multi-select in the feed: hover reveals a checkbox; shift-click extends a
     // range; right-clicking a selected row acts on the whole selection.
     @State private var selection: Set<UUID> = []
@@ -204,40 +200,33 @@ struct ContentView: View {
                 emptyState
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    // Native pinned section headers: each day heading marks the
+                    // boundary inline AND sticks to the top as you scroll into it —
+                    // one element, so it can never double up. Filtering to one day
+                    // needs no heading (the chip names it), so nothing pins then.
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: filterDay == nil ? [.sectionHeaders] : []) {
                         ForEach(days, id: \.day) { group in
-                            // No inline day heading — the pinned bar at the top is the
-                            // single day header, tracking whichever day is on screen.
-                            ForEach(group.entries) { entry in
-                                entryRow(entry, ordered: ordered)
-                                    .background(dayScanReporter(group.day))
+                            Section {
+                                ForEach(group.entries) { entry in
+                                    entryRow(entry, ordered: ordered)
+                                }
+                            } header: {
+                                if filterDay == nil {
+                                    dayHeader(group.day)
+                                }
                             }
                         }
                     }
-                    .padding(.top, filterDay == nil ? 14 : 6)
                     .padding(.bottom, 24)
                     .padding(.leading, 12)
                 }
                 .scrollContentBackground(.hidden)
-                .coordinateSpace(name: Self.feedSpace)
-                .onPreferenceChange(DayScanKey.self) { items in
-                    // The pinned bar always shows a day; track the top-most row on
-                    // screen, defaulting to the newest day before the first scroll.
-                    let top = items.filter { $0.minY <= 44 }.max { $0.minY < $1.minY }?.day
-                    stickyDay = top ?? visibleDays.first?.day
-                }
             }
         }
         .navigationTitle("Recordings")
-        // One pinned stack at the top: the current-day bar on top, with the
-        // selection/filter bar docked directly beneath it when active.
         .safeAreaInset(edge: .top, spacing: 0) {
-            let day = filterDay == nil ? stickyDay : nil
-            if day != nil || !selection.isEmpty || filterDay != nil {
+            if !selection.isEmpty || filterDay != nil {
                 VStack(spacing: 0) {
-                    if let day {
-                        stickyDayBar(day)
-                    }
                     if !selection.isEmpty {
                         selectionBar
                     }
@@ -264,23 +253,9 @@ struct ContentView: View {
         }
     }
 
-    static let feedSpace = "recordingsFeed"
-
-    /// Reports an entry row's day and vertical position within the feed so
-    /// `stickyDay` can track which day is at the top. Rows (unlike day headers)
-    /// stay rendered near the top edge, so the current day never drops out mid-day.
-    private func dayScanReporter(_ day: Date) -> some View {
-        GeometryReader { geo in
-            Color.clear.preference(
-                key: DayScanKey.self,
-                value: [DayScanItem(day: day, minY: geo.frame(in: .named(Self.feedSpace)).minY)]
-            )
-        }
-    }
-
-    /// The slim pinned bar showing the current day. Matches the inline day header
-    /// but on an opaque bar so rows scroll cleanly beneath it.
-    private func stickyDayBar(_ day: Date) -> some View {
+    /// A day boundary that also pins to the top while you're within its section
+    /// (see the `pinnedViews` on the feed). Opaque so rows scroll cleanly beneath.
+    private func dayHeader(_ day: Date) -> some View {
         HStack(spacing: 8) {
             Circle().fill(settings.accent).frame(width: 6, height: 6)
             Text(Format.dayHeading(day))
@@ -288,11 +263,11 @@ struct ContentView: View {
                 .foregroundStyle(settings.accent)
             Spacer(minLength: 0)
         }
-        // 40 = the LazyVStack's leading 12 + the inline day header's leading 28, so
-        // the pinned dot/label line up horizontally with the inline day headings.
-        .padding(.leading, 40)
+        .padding(.leading, 16)   // + the feed's leading 12 = dot at x=28, matched by the selection bar
         .padding(.trailing, 16)
         .padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider().opacity(0.4) }
     }
 
     private func entryRow(_ entry: Entry, ordered: [UUID]) -> some View {
@@ -463,7 +438,7 @@ struct ContentView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.leading, 20)
+        .padding(.leading, 28)   // line the pills up with the day header's dot (12 + 16)
         .padding(.trailing, 16)
         .padding(.top, 10)
         .padding(.bottom, filterDay == nil ? 10 : 6)
@@ -605,20 +580,6 @@ struct ContentView: View {
             }
             .padding(24)
             .allowsHitTesting(false)
-    }
-}
-
-/// One entry row's day and vertical offset within the feed, collected across all
-/// currently-rendered rows so the list can tell which day is at the top and pin it.
-private struct DayScanItem: Equatable {
-    let day: Date
-    let minY: CGFloat
-}
-
-private struct DayScanKey: PreferenceKey {
-    static let defaultValue: [DayScanItem] = []
-    static func reduce(value: inout [DayScanItem], nextValue: () -> [DayScanItem]) {
-        value.append(contentsOf: nextValue())
     }
 }
 

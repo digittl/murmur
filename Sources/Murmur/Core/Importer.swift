@@ -56,6 +56,9 @@ final class Importer: ObservableObject {
     // of the same audio can clear the library dedupe before either is saved; this
     // reserves the checksum synchronously so the second copy still skips.
     private var inFlightChecksums: Set<String> = []
+    // Duplicates/deleted files skipped this batch. They're pulled from the queue on
+    // sight, so this preserves the count for the "Done" summary. Reset on clear.
+    private(set) var skippedCount = 0
 
     init(library: Library, transcriber: Transcriber, ollama: OllamaService, settings: AppSettings) {
         self.library = library
@@ -158,6 +161,7 @@ final class Importer: ObservableObject {
             items[i].state = .cancelled
         }
         runState = .idle
+        skippedCount = 0
         statusLine = "Cancelled."
     }
 
@@ -167,6 +171,7 @@ final class Importer: ObservableObject {
         cancelledIDs.subtract(removed)
         if items.isEmpty {
             statusLine = ""
+            skippedCount = 0
         }
     }
 
@@ -251,7 +256,7 @@ final class Importer: ObservableObject {
             let done = items.filter { $0.state == .done }
             let added = done.filter { $0.reTranscribeEntryID == nil }.count
             let redone = done.count - added
-            let skipped = items.filter { $0.state == .skipped }.count
+            let skipped = skippedCount
 
             var parts: [String] = []
             if added > 0 { parts.append("\(added) added") }
@@ -309,9 +314,11 @@ final class Importer: ObservableObject {
             update(item.id) { $0.state = .failed("Couldn't read file") }
             return
         }
-        if library.hasChecksum(checksum) || inFlightChecksums.contains(checksum) {
-            update(item.id) { $0.state = .skipped }
-            statusLine = "Skipped duplicate: \(item.name)"
+        if library.hasChecksum(checksum) || library.wasDeleted(checksum) || inFlightChecksums.contains(checksum) {
+            // Duplicate or previously-deleted: pull it straight out of the queue.
+            skippedCount += 1
+            items.removeAll { $0.id == item.id }
+            statusLine = library.wasDeleted(checksum) ? "Skipped deleted: \(item.name)" : "Skipped duplicate: \(item.name)"
             return
         }
         inFlightChecksums.insert(checksum)   // reserve synchronously; the other worker will now skip a dup

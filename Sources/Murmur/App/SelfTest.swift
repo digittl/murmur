@@ -46,12 +46,13 @@ enum SelfTest {
                 print("  \(entry.segments.count) segments, \(String(format: "%.1fs", entry.duration))")
             }
 
-            // Dedupe: clear finished, re-enqueue the same folder — all should skip.
+            // Dedupe: clear finished, re-enqueue the same folder — all should skip
+            // (and be pulled out of the queue, so count them via skippedCount).
             let before = library.entries.count
             importer.clearFinished()
             importer.enqueue(urls: [URL(fileURLWithPath: folder)])
             await waitForQueue(importer)
-            let skipped = importer.items.filter { $0.state == .skipped }.count
+            let skipped = importer.skippedCount
             let after = library.entries.count
             print("\ndedupe: \(before) -> \(after) entries, \(skipped) skipped on re-import — \(before == after && skipped > 0 ? "PASS" : "FAIL")")
 
@@ -60,12 +61,30 @@ enum SelfTest {
             reopened.load()
             print("persistence: reloaded \(reopened.entries.count) — \(reopened.entries.count == after ? "PASS" : "FAIL")")
 
+            // Soft delete: delete one entry, re-import the folder — it must not come
+            // back, and a fresh Library must still remember the tombstone.
+            var softDeleteOK = true
+            if let victim = library.entries.first {
+                let checksum = victim.checksum
+                library.delete(victim)
+                importer.clearFinished()
+                importer.enqueue(urls: [URL(fileURLWithPath: folder)])
+                await waitForQueue(importer)
+                let resurrected = library.entries.contains { $0.checksum == checksum }
+
+                let recheck = Library()
+                recheck.load()
+                let remembered = recheck.wasDeleted(checksum)
+                softDeleteOK = !resurrected && library.entries.count == after - 1 && remembered
+                print("soft delete: re-import after delete — \(softDeleteOK ? "PASS" : "FAIL")")
+            }
+
             ollama.stop()
             if !keep {
                 try? FileManager.default.removeItem(at: temp)
             }
             print("\n== done ==")
-            exit(before == after && skipped > 0 && reopened.entries.count == after && after > 0 ? 0 : 1)
+            exit(before == after && skipped > 0 && reopened.entries.count == after && after > 0 && softDeleteOK ? 0 : 1)
         }
 
         RunLoop.main.run()
@@ -73,8 +92,18 @@ enum SelfTest {
 
     @MainActor
     private static func waitForQueue(_ importer: Importer) async {
+        // enqueue() is async (it walks the tree off-main), so first wait for the run
+        // to actually start…
+        for _ in 0..<50 {
+            if importer.runState != .idle || !importer.items.isEmpty {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        // …then for it to drain. Skipped items are removed, so "done" is simply:
+        // idle with nothing left unfinished (an empty queue counts as done).
         for _ in 0..<1200 {   // up to ~120s
-            if importer.runState == .idle, importer.finishedCount == importer.total, importer.total > 0 {
+            if importer.runState == .idle, importer.items.allSatisfy({ $0.state.isFinished }) {
                 return
             }
             try? await Task.sleep(for: .milliseconds(100))
