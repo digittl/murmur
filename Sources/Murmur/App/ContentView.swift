@@ -254,10 +254,12 @@ struct ContentView: View {
     }
 
     /// A compact day boundary that also pins to the top while you're within its
-    /// section (see the `pinnedViews` on the feed). Full-width and opaque (`.bar`) so
-    /// rows scroll cleanly beneath, but light on chrome — a small uppercase label and
-    /// a hairline rule instead of a tall bar with a full divider, so it reads as a
-    /// quiet section marker and gives the feed back its vertical space.
+    /// section (see the `pinnedViews` on the feed). Full-width and painted with the
+    /// same solid window fill as the feed sits on (not a translucent `.bar` material,
+    /// which lets rows blur through and read as noise) so pinned rows scroll cleanly
+    /// out of sight beneath it, but light on chrome — a small uppercase label and a
+    /// hairline rule instead of a tall bar with a full divider, so it reads as a quiet
+    /// section marker and gives the feed back its vertical space.
     private func dayHeader(_ day: Date) -> some View {
         HStack(spacing: 7) {
             Circle().fill(settings.accent).frame(width: 5, height: 5)
@@ -271,7 +273,7 @@ struct ContentView: View {
         .padding(.leading, 16)   // + the feed's leading 12 = dot at x=28, matched by the selection bar
         .padding(.trailing, 16)
         .padding(.vertical, 5)
-        .background(.bar)
+        .background(WindowTint.solid(settings.accent))
         .overlay(alignment: .bottom) {
             Rectangle().fill(settings.accent.opacity(0.12)).frame(height: 1)
         }
