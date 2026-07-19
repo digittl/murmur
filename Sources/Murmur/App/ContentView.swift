@@ -679,6 +679,12 @@ struct WindowTint: NSViewRepresentable {
             window.titlebarAppearsTransparent = true
             window.isOpaque = true
             window.backgroundColor = Self.fill(for: accent)
+            // Keep the content view out from under the titlebar. With a full-size
+            // content view, scrolled rows slide up behind the (transparent) titlebar
+            // and read as noise around the nav title. Dropping the style mask parks
+            // the content below the titlebar, which — being transparent over the
+            // opaque tinted window fill — still shows the seamless tint, no seam.
+            window.styleMask.remove(.fullSizeContentView)
             Self.installWordmark(in: window, accent: accent)
         }
     }
