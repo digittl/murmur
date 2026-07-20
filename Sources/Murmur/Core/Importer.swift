@@ -310,7 +310,12 @@ final class Importer: ObservableObject {
 
         var copiedAudio: URL?
 
-        guard let checksum = Library.checksum(of: item.url) else {
+        // Hash off the main actor: reading + SHA-256-ing a whole audio file on the
+        // main thread beach-balls the UI, worst on the first drag of a big folder.
+        let url = item.url
+        guard let checksum = await Task.detached(priority: .userInitiated, operation: {
+            Library.checksum(of: url)
+        }).value else {
             update(item.id) { $0.state = .failed("Couldn't read file") }
             return
         }
@@ -330,7 +335,10 @@ final class Importer: ObservableObject {
             let storedName = "\(id.uuidString).\(ext)"
             let dest = Storage.audioDir.appendingPathComponent(storedName)
             try Storage.ensureDirectories()
-            try FileManager.default.copyItem(at: item.url, to: dest)
+            // Copy off the main actor too — a large file copy blocks the UI otherwise.
+            try await Task.detached(priority: .userInitiated, operation: {
+                try FileManager.default.copyItem(at: url, to: dest)
+            }).value
             copiedAudio = dest
 
             update(item.id) { $0.state = .transcribing }

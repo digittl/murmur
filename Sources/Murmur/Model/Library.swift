@@ -143,8 +143,10 @@ final class Library: ObservableObject {
         try? data.write(to: jsonURL(for: entry), options: .atomic)
     }
 
-    /// SHA-256 of a file's bytes, the identity used for dedupe.
-    static func checksum(of url: URL) -> String? {
+    /// SHA-256 of a file's bytes, the identity used for dedupe. `nonisolated` so the
+    /// hash (which reads the whole file) can run off the main actor — hashing a large
+    /// audio file on the main thread beach-balls the UI on import.
+    nonisolated static func checksum(of url: URL) -> String? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
             return nil
         }
