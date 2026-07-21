@@ -13,6 +13,14 @@ your Mac; everything syncs through iCloud Drive.
 Free and open source (Apache-2.0). Download the latest build from
 [**Releases**](https://github.com/digittl/murmur/releases/latest).
 
+![The Murmur diary — a month calendar and an import queue beside a reverse-chronological feed of transcribed voice notes grouped by day.](assets/screenshots/diary.png)
+
+<p align="center">
+  <img src="assets/screenshots/entry.png" width="49%" alt="An entry open for reading: AI title and summary, a scrubbable player, and the full transcript aligned to the audio." />
+  &nbsp;
+  <img src="assets/screenshots/ask.png" width="49%" alt="The Ask-your-journal chat drawer, answering questions grounded in your own transcripts, on-device." />
+</p>
+
 ## What it does
 
 - **Record a note** with your microphone right inside the app, or **import a
