@@ -197,6 +197,10 @@ struct EntryDetailView: View {
                 Label("Show in Finder", systemImage: "folder")
             }
 
+            ShareLink(item: audioURL) {
+                Label("Share Audio", systemImage: "square.and.arrow.up")
+            }
+
             Button(role: .destructive) {
                 player.stop()
                 library.delete(draft)
