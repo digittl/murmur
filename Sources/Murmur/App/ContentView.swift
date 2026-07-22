@@ -598,11 +598,9 @@ struct ContentView: View {
 private struct EntryRow: View {
     let entry: Entry
     @EnvironmentObject private var settings: AppSettings
-    @EnvironmentObject private var player: Player
     @EnvironmentObject private var library: Library
 
     private var audioURL: URL { library.audioURL(for: entry) }
-    private var isThisPlaying: Bool { player.loadedURL == audioURL && player.isPlaying }
 
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
@@ -632,19 +630,9 @@ private struct EntryRow: View {
                         .lineLimit(2)
                 }
                 HStack(spacing: 6) {
-                    Button {
-                        togglePlay()
-                    } label: {
-                        Image(systemName: isThisPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(settings.accent)
-                            .offset(y: isThisPlaying ? 0 : -1)
-                            .frame(width: 20, height: 20)
-                            .background(Circle().fill(settings.accent.opacity(0.12)))
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(isThisPlaying ? "Pause" : "Play")
+                    // Isolated in its own observing subview so the 20 Hz playhead
+                    // ticks only re-render the button, not this whole row's body.
+                    RowPlayButton(audioURL: audioURL)
 
                     Text(Format.clock(entry.duration))
                         .font(.caption2.monospacedDigit())
@@ -658,6 +646,33 @@ private struct EntryRow: View {
             }
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// The small play/pause control on a feed row. Kept as its own view so that the
+/// `Player`'s live playhead updates (~20 Hz while playing) invalidate only this
+/// glyph, not the whole `EntryRow` (title, summary, badge).
+private struct RowPlayButton: View {
+    let audioURL: URL
+    @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var player: Player
+
+    private var isThisPlaying: Bool { player.loadedURL == audioURL && player.isPlaying }
+
+    var body: some View {
+        Button {
+            togglePlay()
+        } label: {
+            Image(systemName: isThisPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(settings.accent)
+                .offset(y: isThisPlaying ? 0 : -1)
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(settings.accent.opacity(0.12)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(isThisPlaying ? "Pause" : "Play")
     }
 
     private func togglePlay() {
