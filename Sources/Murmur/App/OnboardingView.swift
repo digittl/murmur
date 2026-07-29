@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// First-run (and whenever-a-model-is-missing) setup: pick a transcription model
@@ -20,6 +21,32 @@ struct OnboardingView: View {
     private var assistantReady: Bool { ollama.serverState == .ready && ollama.isInstalled(ollama.assistantTag) }
 
     var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                steps
+                    .padding(26)
+            }
+
+            Divider()
+
+            footer
+                .padding(.horizontal, 26)
+                .padding(.vertical, 14)
+                .background(.bar)
+        }
+        .frame(width: 560, height: sheetHeight)
+        .task { await ollama.start() }
+    }
+
+    /// A sheet never scrolls on its own and this one is taller than a laptop
+    /// display, so cap it to the screen and scroll the steps inside — otherwise
+    /// the Download & Continue button is clipped off the bottom and unreachable.
+    private var sheetHeight: CGFloat {
+        let visible = NSScreen.main?.visibleFrame.height ?? 800
+        return min(760, max(420, visible - 80))
+    }
+
+    private var steps: some View {
         VStack(alignment: .leading, spacing: 20) {
             header
 
@@ -81,12 +108,7 @@ struct OnboardingView: View {
                     ) { ollama.assistantTag = model.tag }
                 }
             }
-
-            footer
         }
-        .padding(26)
-        .frame(width: 560)
-        .task { await ollama.start() }
     }
 
     // MARK: - Pieces
