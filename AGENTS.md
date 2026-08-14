@@ -48,7 +48,7 @@ Three layers under `Sources/Murmur/`:
 
 ### Storage — one JSON per entry
 
-The library lives under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/Murmur/`, falling back to `~/Documents/Murmur/`) as one JSON file per entry in `entries/`, with copied audio in `audio/`. There is deliberately no shared index file, so iCloud never merges concurrent edits. Dedupe is by SHA-256 of the audio bytes (`Entry.checksum`). `Entry.text` (a user edit) overrides `segments` for display via `Entry.prose`.
+The library lives under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/Murmur/`, falling back to `~/Documents/Murmur/`) as one JSON file per entry in `entries/`, with copied audio in `audio/`. There is deliberately no shared index file, so iCloud never merges concurrent edits. Dedupe is by SHA-256 of the audio bytes (`Entry.checksum`). `Entry.prose` picks the most-edited transcript available — `text` (a user edit), else `tidied` (the AI rewrite), else `segments` joined. `segments` are never overwritten by tidying or editing, so the raw words survive (`Entry.rawProse`) even though the UI only ever shows `prose`.
 
 ### Concurrency — read before touching `Importer`
 
@@ -64,7 +64,13 @@ Every service (`Importer`, `Transcriber`, `OllamaService`, `Library`) is a `@Mai
 
 ### Ollama integration
 
-`OllamaService` attaches to a running Ollama or launches the bundled binary, and never kills a server it didn't spawn. It does captions (`summarize`) and the "Ask your journal" chat — a tool loop: `chatStep(...)` returns the model's turn plus any `toolCalls`; the caller runs the tools (search/read transcripts) and loops until there are none, streaming content live. The installed model-tag set is cached to `UserDefaults` (`MurmurInstalledLLMs`) so onboarding distinguishes a fresh machine from a slow server probe.
+`OllamaService` attaches to a running Ollama or launches the bundled binary, and never kills a server it didn't spawn. It does the transcript tidy-up (`tidy`), captions (`summarize`) and the "Ask your journal" chat — a tool loop: `chatStep(...)` returns the model's turn plus any `toolCalls`; the caller runs the tools (search/read transcripts) and loops until there are none, streaming content live. The installed model-tag set is cached to `UserDefaults` (`MurmurInstalledLLMs`) so onboarding distinguishes a fresh machine from a slow server probe.
+
+### Transcript tidy-up
+
+Raw Whisper output is one unpunctuated wall of text. `OllamaService.tidy` runs it back through the caption model as a copy-editor: paragraphs, punctuation, filler removed, and words the recogniser obviously misheard corrected from surrounding context. The prompt is deliberately fidelity-first — the fixed rules (keep every fact, never summarize, don't guess at unintelligible passages, output the transcript and nothing else) wrap the user-replaceable layout guidance, so a custom prompt can't turn the copy-editor into an author. Long transcripts are chunked on sentence boundaries and rejoined so nothing is truncated.
+
+It runs in the import pipeline between transcribe and summarize (state `.tidying`), and the caption is written from the tidied text. `AppSettings.tidyOnImport` (default on) gates it; older entries can be tidied from the entry menu or the feed's context menu. If Ollama isn't ready the tidy is skipped and the entry keeps the raw words — never a failure.
 
 ### Onboarding gate
 

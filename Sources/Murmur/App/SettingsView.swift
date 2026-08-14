@@ -91,11 +91,20 @@ private struct UpdateSettings: View {
     }
 }
 
-/// Custom captioning prompts — override how titles and summaries are written.
+/// Custom prompts — override how titles, summaries and the transcript tidy-up are
+/// written, and switch the tidy-up itself on or off.
 private struct PromptSettings: View {
     @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
+        ScrollView {
+            content
+                .padding(.vertical, 2)
+        }
+        .frame(height: 460)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Custom prompts")
                 .font(.headline)
@@ -115,6 +124,22 @@ private struct PromptSettings: View {
                 isOn: $settings.customSummaryEnabled,
                 text: $settings.customSummaryPrompt,
                 placeholder: "e.g. One factual sentence, no adjectives."
+            )
+
+            Divider()
+
+            Toggle(isOn: $settings.tidyOnImport) {
+                Text("Tidy up transcripts").font(.subheadline.weight(.medium))
+            }
+            Text("Rewrites each new recording into paragraphs — punctuation, no filler words, and obvious mishearings corrected from context. Your words and facts are kept; the title and summary are written from the tidied text. Tidy an older entry any time from its ✨ menu.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            promptBlock(
+                title: "Tidy-up prompt",
+                isOn: $settings.customTidyEnabled,
+                text: $settings.customTidyPrompt,
+                placeholder: "e.g. Short paragraphs. Keep every \"um\" — I want it verbatim."
             )
 
             Spacer()

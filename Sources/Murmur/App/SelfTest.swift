@@ -1,7 +1,7 @@
 import Foundation
 
 /// Headless smoke test of the full pipeline (queue → dedupe → transcribe →
-/// Ollama summarize → persist), run via `Murmur --selftest <folder>`. Uses the
+/// Ollama tidy-up → summarize → persist), run via `Murmur --selftest <folder>`. Uses the
 /// fast `tiny` Whisper model and a throwaway storage root so it never touches the
 /// real iCloud library. Not part of the shipping UI; kept for dev/CI verification.
 enum SelfTest {
@@ -34,7 +34,8 @@ enum SelfTest {
             }
             print("active model: \(ollama.activeTag) (installed: \(ollama.isInstalled(ollama.activeTag)))")
 
-            let importer = Importer(library: library, transcriber: transcriber, ollama: ollama, settings: AppSettings())
+            let settings = AppSettings()
+            let importer = Importer(library: library, transcriber: transcriber, ollama: ollama, settings: settings)
             print("enqueueing \(folder) with whisper=\(transcriber.selectedVariant)…")
             importer.enqueue(urls: [URL(fileURLWithPath: folder)])
             await waitForQueue(importer)
@@ -44,6 +45,18 @@ enum SelfTest {
                 print("• [\(entry.date.formatted(date: .abbreviated, time: .shortened))] \"\(entry.title)\"")
                 print("  summary: \(entry.summary)")
                 print("  \(entry.segments.count) segments, \(String(format: "%.1fs", entry.duration))")
+                print("  tidied: \(entry.hasTidy ? entry.prose : "— (raw)")")
+            }
+
+            // Tidy-up: with a caption model available every new entry should carry a
+            // rewrite, and the raw words must still be intact behind it. Without
+            // Ollama the tidy is skipped by design, so it can't be a failure.
+            var tidyOK = true
+            if ollama.serverState == .ready, ollama.isInstalled(ollama.activeTag), settings.tidyOnImport {
+                let tidied = library.entries.filter(\.hasTidy).count
+                let rawIntact = library.entries.allSatisfy { !$0.rawProse.isEmpty }
+                tidyOK = tidied == library.entries.count && rawIntact
+                print("\ntidy-up: \(tidied)/\(library.entries.count) rewritten, raw kept — \(tidyOK ? "PASS" : "FAIL")")
             }
 
             // Dedupe: clear finished, re-enqueue the same folder — all should skip
@@ -84,7 +97,7 @@ enum SelfTest {
                 try? FileManager.default.removeItem(at: temp)
             }
             print("\n== done ==")
-            exit(before == after && skipped > 0 && reopened.entries.count == after && after > 0 && softDeleteOK ? 0 : 1)
+            exit(before == after && skipped > 0 && reopened.entries.count == after && after > 0 && softDeleteOK && tidyOK ? 0 : 1)
         }
 
         RunLoop.main.run()

@@ -20,7 +20,7 @@ struct EntryDetailView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var regenerating: Field?
 
-    private enum Field { case title, summary }
+    private enum Field { case title, summary, tidy }
 
     init(entry: Entry) {
         self.entry = entry
@@ -160,9 +160,15 @@ struct EntryDetailView: View {
                     .foregroundStyle(.secondary)
                 if draft.transcriptEdited {
                     Text("· edited").font(.caption).foregroundStyle(.tertiary)
+                } else if draft.hasTidy {
+                    Text("· tidied").font(.caption).foregroundStyle(.tertiary)
                 }
                 if isReTranscribing {
                     Text("· re-transcribing…").font(.caption).foregroundStyle(.tertiary)
+                    ProgressView().controlSize(.small)
+                }
+                if regenerating == .tidy {
+                    Text("· tidying up…").font(.caption).foregroundStyle(.tertiary)
                     ProgressView().controlSize(.small)
                 }
             }
@@ -183,6 +189,9 @@ struct EntryDetailView: View {
             Menu {
                 Button { regenerate(.title) } label: { Label("Regenerate title", systemImage: "textformat") }
                 Button { regenerate(.summary) } label: { Label("Regenerate summary", systemImage: "text.alignleft") }
+                Button { regenerate(.tidy) } label: {
+                    Label(draft.hasTidy ? "Tidy up again" : "Tidy up transcript", systemImage: "text.append")
+                }
                 Divider()
                 Button { importer.reTranscribe(draft) } label: { Label("Re-transcribe", systemImage: "waveform.badge.magnifyingglass") }
                     .disabled(isReTranscribing)
@@ -234,6 +243,16 @@ struct EntryDetailView: View {
             case .summary:
                 if let summary = await ollama.regenerateSummary(from: draft.prose, prompt: settings.effectiveSummaryPrompt, persona: settings.authorPersona) {
                     draft.summary = summary
+                }
+            case .tidy:
+                // Tidy the words as heard, unless the user has corrected them by
+                // hand — their edit is the better source, and re-tidying an already
+                // tidied transcript just compounds the model's liberties.
+                let source = draft.transcriptEdited ? draft.prose : draft.rawProse
+                if let tidied = await ollama.tidy(source, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) {
+                    draft.tidied = tidied
+                    draft.text = nil
+                    draft.transcriptEdited = false
                 }
             }
             library.upsert(draft)

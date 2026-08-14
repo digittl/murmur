@@ -263,12 +263,14 @@ final class OllamaService: ObservableObject {
         text.count > 6000 ? String(text.prefix(6000)) + "…" : text
     }
 
-    /// Low-level chat call returning the assistant's raw content string.
-    private func chat(system: String, user: String, json: Bool) async -> String? {
+    /// Low-level chat call returning the assistant's raw content string. The tidy
+    /// pass rewrites far more text than a caption does, so it asks for a colder
+    /// temperature and a longer ceiling.
+    private func chat(system: String, user: String, json: Bool, temperature: Double = 0.4, timeout: TimeInterval = 120) async -> String? {
         var body: [String: Any] = [
             "model": activeTag,
             "stream": false,
-            "options": ["temperature": 0.4],
+            "options": ["temperature": temperature],
             "messages": [
                 ["role": "system", "content": system],
                 ["role": "user", "content": user],
@@ -278,7 +280,7 @@ final class OllamaService: ObservableObject {
 
         var request = URLRequest(url: baseURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
-        request.timeoutInterval = 120
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
@@ -439,6 +441,127 @@ final class OllamaService: ObservableObject {
         let system = "You summarize entries in a personal spoken journal. \(persona)Reply with ONLY the summary text. Summary guidance: \(prompt ?? Self.defaultSummaryGuidance) Use only what's in the transcript; invent nothing."
         guard let content = await chat(system: system, user: "Summarize this transcript:\n\n\(clip(trimmed))", json: false) else { return nil }
         return content.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Tidy-up
+
+    /// Default guidance for the transcript rewrite — the layout half of the job.
+    /// Custom prompts (from Settings) replace this section only; the fidelity rules
+    /// around it always hold, so a custom prompt can't turn the copy-editor into an
+    /// author.
+    static let defaultTidyGuidance = """
+    Break the text into paragraphs at natural shifts in topic.
+    Fix punctuation, capitalisation and sentence boundaries.
+    Cut filler and stammering — "um", "uh", "like", "you know", repeated false \
+    starts — where removing it changes nothing else.
+    """
+
+    /// Rewrites a raw transcript into readable paragraphs. Returns nil if the model
+    /// isn't ready or the rewrite came back empty. Long transcripts are rewritten in
+    /// chunks and rejoined, so nothing is silently truncated.
+    func tidy(_ transcript: String, prompt: String? = nil, persona: String = "") async -> String? {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, serverState == .ready, isInstalled(activeTag) else {
+            return nil
+        }
+
+        let persona = persona.isEmpty ? "" : persona + " "
+        let system = """
+        You are a transcript copy-editor for a personal spoken journal. \(persona)The \
+        user message is one voice note as it came out of speech recognition. Rewrite \
+        it so it reads well on the page.
+
+        ## Rules
+        Keep every fact, name, number, date and event, in the order they were said.
+        Keep the speaker's own words, first-person voice and tone.
+        Never summarize, condense or expand — your rewrite is about as long as the \
+        transcript.
+        Add nothing that isn't in the transcript: no introduction, no closing line, \
+        no commentary.
+        The transcript may start or end mid-thought. Leave it that way — don't add \
+        words to round it off.
+
+        ## Rewriting
+        \(prompt ?? Self.defaultTidyGuidance)
+
+        ## Mishearings
+        Speech recognition gets words wrong. Correct a word only where the \
+        surrounding sentence makes the intended one obvious — a name spelled \
+        correctly elsewhere in the transcript, or a word that makes no sense in \
+        context but has an obvious near-homophone that does. Where you can't tell \
+        what was meant, keep the words exactly as they are.
+
+        ## Output
+        Reply with the rewritten transcript and nothing else — no preamble, no \
+        heading, no quotes, no markdown.
+        """
+
+        var pieces: [String] = []
+        for chunk in Self.chunk(trimmed) {
+            guard let content = await chat(system: system, user: chunk, json: false, temperature: 0.2, timeout: 300) else {
+                return nil
+            }
+            let cleaned = Self.stripPreamble(content)
+            guard !cleaned.isEmpty else {
+                return nil
+            }
+            pieces.append(cleaned)
+        }
+
+        let result = pieces.joined(separator: "\n\n")
+        return result.isEmpty ? nil : result
+    }
+
+    /// Splits a transcript into model-sized pieces, cutting at the first sentence
+    /// end past the limit so no sentence is halved. One piece for anything under the
+    /// limit, which is the common case for a voice note. Characters are copied
+    /// through verbatim — the join of the pieces is the original text.
+    private static func chunk(_ text: String, limit: Int = 3500) -> [String] {
+        guard text.count > limit else {
+            return [text]
+        }
+
+        var chunks: [String] = []
+        var current = ""
+        for character in text {
+            current.append(character)
+            if current.count >= limit, ".!?".contains(character) {
+                chunks.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
+                current = ""
+            }
+        }
+
+        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty {
+            chunks.append(tail)
+        }
+        return chunks
+    }
+
+    /// Drops a leading "Here's the cleaned-up transcript:" line and any code fence
+    /// the model wrapped its answer in, which smaller models do despite the prompt.
+    private static func stripPreamble(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if text.hasPrefix("```") {
+            var lines = text.components(separatedBy: "\n")
+            lines.removeFirst()
+            if lines.last?.trimmingCharacters(in: .whitespaces).hasPrefix("```") == true {
+                lines.removeLast()
+            }
+            text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        // A preamble is a short opening line that ends in a colon and is followed by
+        // the actual text — never a sentence of the journal itself.
+        if let firstBreak = text.range(of: "\n") {
+            let opener = text[text.startIndex..<firstBreak.lowerBound].trimmingCharacters(in: .whitespaces)
+            if opener.count < 120, opener.hasSuffix(":") {
+                text = String(text[firstBreak.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        return text
     }
 
     /// A serviceable caption with no model: leading words as a title, first

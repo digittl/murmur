@@ -352,6 +352,11 @@ struct ContentView: View {
         } label: {
             Label(n > 1 ? "Regenerate \(n) summaries" : "Regenerate summary", systemImage: "text.alignleft")
         }
+        Button {
+            tidy(ids: targets)
+        } label: {
+            Label(n > 1 ? "Tidy up \(n) transcripts" : "Tidy up transcript", systemImage: "text.append")
+        }
         Divider()
         Button {
             reTranscribe(ids: targets)
@@ -384,6 +389,26 @@ struct ContentView: View {
                         updated.summary = value
                     }
                 }
+                library.upsert(updated)
+            }
+        }
+    }
+
+    /// Rewrites the selected transcripts into readable paragraphs. Runs one at a
+    /// time — a tidy-up is a whole-transcript rewrite, and firing a batch of them at
+    /// one local model at once only makes them all slower.
+    private func tidy(ids: [UUID]) {
+        Task {
+            for id in ids {
+                guard let entry = library.entries.first(where: { $0.id == id }) else { continue }
+                let source = entry.transcriptEdited ? entry.prose : entry.rawProse
+                guard let tidied = await ollama.tidy(source, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) else { continue }
+
+                // Re-read: the entry may have changed while the model was working.
+                guard var updated = library.entries.first(where: { $0.id == id }) else { continue }
+                updated.tidied = tidied
+                updated.text = nil
+                updated.transcriptEdited = false
                 library.upsert(updated)
             }
         }

@@ -11,11 +11,11 @@ final class Importer: ObservableObject {
     nonisolated static let audioExtensions: Set<String> = ["m4a", "mp3", "wav", "aac", "caf", "aiff", "aif", "flac", "ogg"]
 
     enum ItemState: Equatable {
-        case pending, transcribing, summarizing, done, skipped, cancelled
+        case pending, transcribing, tidying, summarizing, done, skipped, cancelled
         case failed(String)
 
         var isPending: Bool { self == .pending }
-        var isActive: Bool { self == .transcribing || self == .summarizing }
+        var isActive: Bool { self == .transcribing || self == .tidying || self == .summarizing }
         var isFinished: Bool {
             switch self {
             case .done, .skipped, .cancelled, .failed: return true
@@ -359,10 +359,16 @@ final class Importer: ObservableObject {
                 return
             }
 
+            let tidied = await tidy(text, item: item)
+
+            if cancelledIDs.contains(item.id) {
+                throw Transcriber.TranscriberError.cancelled
+            }
+
             update(item.id) { $0.state = .summarizing }
             statusLine = "Summarizing \(item.name)…"
             let caption = await ollama.summarize(
-                text,
+                tidied ?? text,
                 titlePrompt: settings.effectiveTitlePrompt,
                 summaryPrompt: settings.effectiveSummaryPrompt,
                 persona: settings.authorPersona
@@ -387,6 +393,7 @@ final class Importer: ObservableObject {
                 title: caption.title,
                 summary: caption.summary,
                 segments: result.segments,
+                tidied: tidied,
                 transcriptEdited: false,
                 summaryEdited: false,
                 createdAt: .now,
@@ -442,10 +449,16 @@ final class Importer: ObservableObject {
                 return
             }
 
+            let tidied = await tidy(text, item: item)
+
+            if cancelledIDs.contains(item.id) {
+                throw Transcriber.TranscriberError.cancelled
+            }
+
             update(item.id) { $0.state = .summarizing }
             statusLine = "Summarizing \(name)…"
             let caption = await ollama.summarize(
-                text,
+                tidied ?? text,
                 titlePrompt: settings.effectiveTitlePrompt,
                 summaryPrompt: settings.effectiveSummaryPrompt,
                 persona: settings.authorPersona
@@ -465,6 +478,7 @@ final class Importer: ObservableObject {
             entry.model = transcriber.selectedVariant
             entry.duration = duration
             entry.text = nil                  // the fresh transcript supersedes any manual edit
+            entry.tidied = tidied              // and any tidy-up of the old words
             entry.transcriptEdited = false
             entry.title = caption.title
             entry.summary = caption.summary
@@ -480,6 +494,19 @@ final class Importer: ObservableObject {
         } catch {
             update(item.id) { $0.state = .failed(error.localizedDescription) }
         }
+    }
+
+    /// Rewrites a fresh transcript into readable paragraphs, if the user wants that
+    /// on import. Returns nil when it's switched off or the model isn't available —
+    /// the entry then keeps the raw words and can be tidied by hand later.
+    private func tidy(_ text: String, item: Item) async -> String? {
+        guard settings.tidyOnImport else {
+            return nil
+        }
+        update(item.id) { $0.state = .tidying }
+        statusLine = "Tidying \(item.name)…"
+
+        return await ollama.tidy(text, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona)
     }
 
     // MARK: - File helpers
