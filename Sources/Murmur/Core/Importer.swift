@@ -506,7 +506,12 @@ final class Importer: ObservableObject {
         update(item.id) { $0.state = .tidying }
         statusLine = "Tidying \(item.name)…"
 
-        return await ollama.tidy(text, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona)
+        return await ollama.tidy(
+            text,
+            prompt: settings.effectiveTidyPrompt,
+            persona: settings.authorPersona,
+            isCancelled: { [weak self] in self?.cancelledIDs.contains(item.id) ?? true }
+        )
     }
 
     // MARK: - File helpers

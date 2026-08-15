@@ -458,8 +458,14 @@ final class OllamaService: ObservableObject {
 
     /// Rewrites a raw transcript into readable paragraphs. Returns nil if the model
     /// isn't ready or the rewrite came back empty. Long transcripts are rewritten in
-    /// chunks and rejoined, so nothing is silently truncated.
-    func tidy(_ transcript: String, prompt: String? = nil, persona: String = "") async -> String? {
+    /// chunks and rejoined, so nothing is silently truncated; `isCancelled` is polled
+    /// between chunks so an aborted import doesn't sit through the rest of them.
+    func tidy(
+        _ transcript: String,
+        prompt: String? = nil,
+        persona: String = "",
+        isCancelled: () -> Bool = { false }
+    ) async -> String? {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, serverState == .ready, isInstalled(activeTag) else {
             return nil
@@ -496,9 +502,18 @@ final class OllamaService: ObservableObject {
         heading, no quotes, no markdown.
         """
 
+        // Splitting walks the whole transcript, so keep it off the main actor — an
+        // hour-long note is tens of thousands of characters.
+        let chunks = await Task.detached(priority: .userInitiated) {
+            Self.chunk(trimmed)
+        }.value
+
         var pieces: [String] = []
-        for chunk in Self.chunk(trimmed) {
-            guard let content = await chat(system: system, user: chunk, json: false, temperature: 0.2, timeout: 300) else {
+        for chunk in chunks {
+            if isCancelled() {
+                return nil
+            }
+            guard let content = await chat(system: system, user: chunk, json: false, temperature: 0.2, timeout: 180) else {
                 return nil
             }
             let cleaned = Self.stripPreamble(content)
@@ -512,22 +527,33 @@ final class OllamaService: ObservableObject {
         return result.isEmpty ? nil : result
     }
 
-    /// Splits a transcript into model-sized pieces, cutting at the first sentence
-    /// end past the limit so no sentence is halved. One piece for anything under the
-    /// limit, which is the common case for a voice note. Characters are copied
-    /// through verbatim — the join of the pieces is the original text.
-    private static func chunk(_ text: String, limit: Int = 3500) -> [String] {
+    /// Splits a transcript into model-sized pieces, cutting at the first sentence end
+    /// past `limit` so no sentence is halved. One piece for anything under the limit,
+    /// which is the common case for a voice note. Characters are copied through
+    /// verbatim — the join of the pieces is the original text.
+    ///
+    /// `hardLimit` is the backstop for text with no sentence punctuation at all, which
+    /// raw speech-to-text can produce: past it the split falls back to the next space,
+    /// so a piece can never grow past what the model will actually read.
+    nonisolated private static func chunk(_ text: String, limit: Int = 3500, hardLimit: Int = 5000) -> [String] {
         guard text.count > limit else {
             return [text]
         }
 
         var chunks: [String] = []
         var current = ""
+        var length = 0   // tracked, not recomputed — String.count is O(n)
+
         for character in text {
             current.append(character)
-            if current.count >= limit, ".!?".contains(character) {
+            length += 1
+
+            let endsSentence = length >= limit && ".!?".contains(character)
+            let overrun = length >= hardLimit && character.isWhitespace
+            if endsSentence || overrun {
                 chunks.append(current.trimmingCharacters(in: .whitespacesAndNewlines))
                 current = ""
+                length = 0
             }
         }
 
@@ -552,11 +578,15 @@ final class OllamaService: ObservableObject {
             text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        // A preamble is a short opening line that ends in a colon and is followed by
-        // the actual text — never a sentence of the journal itself.
+        // A preamble is a short opening line ending in a colon that talks ABOUT the
+        // rewrite. The keyword check is what keeps a genuine journal line — "Things I
+        // need to sort out before Friday:" — from being thrown away with it.
         if let firstBreak = text.range(of: "\n") {
             let opener = text[text.startIndex..<firstBreak.lowerBound].trimmingCharacters(in: .whitespaces)
-            if opener.count < 120, opener.hasSuffix(":") {
+            let lowered = opener.lowercased()
+            let soundsLikePreamble = ["transcript", "rewritten", "rewrite", "cleaned", "tidied", "edited", "version", "here is", "here's"]
+                .contains { lowered.contains($0) }
+            if opener.count < 120, opener.hasSuffix(":"), soundsLikePreamble {
                 text = String(text[firstBreak.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }

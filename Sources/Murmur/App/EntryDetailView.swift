@@ -249,10 +249,15 @@ struct EntryDetailView: View {
                 // hand — their edit is the better source, and re-tidying an already
                 // tidied transcript just compounds the model's liberties.
                 let source = draft.transcriptEdited ? draft.prose : draft.rawProse
+                let before = draft.text
                 if let tidied = await ollama.tidy(source, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) {
-                    draft.tidied = tidied
-                    draft.text = nil
-                    draft.transcriptEdited = false
+                    // The field stays live while the model works; if they typed into it
+                    // meanwhile, their words win over a rewrite of the older ones.
+                    if draft.text == before {
+                        draft.tidied = tidied
+                        draft.text = nil
+                        draft.transcriptEdited = false
+                    }
                 }
             }
             library.upsert(draft)

@@ -404,8 +404,12 @@ struct ContentView: View {
                 let source = entry.transcriptEdited ? entry.prose : entry.rawProse
                 guard let tidied = await ollama.tidy(source, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) else { continue }
 
-                // Re-read: the entry may have changed while the model was working.
-                guard var updated = library.entries.first(where: { $0.id == id }) else { continue }
+                // Re-read: a rewrite takes a while, and the entry may have been edited
+                // or re-transcribed meanwhile. Either way the tidy is of stale words —
+                // drop it rather than overwrite what the user (or Whisper) just wrote.
+                guard var updated = library.entries.first(where: { $0.id == id }),
+                      updated.text == entry.text,
+                      updated.segments == entry.segments else { continue }
                 updated.tidied = tidied
                 updated.text = nil
                 updated.transcriptEdited = false
