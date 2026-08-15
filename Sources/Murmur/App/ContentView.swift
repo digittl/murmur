@@ -357,6 +357,7 @@ struct ContentView: View {
         } label: {
             Label(n > 1 ? "Tidy up \(n) transcripts" : "Tidy up transcript", systemImage: "text.append")
         }
+        .disabled(ollama.serverState != .ready || !targets.contains { canTidy($0) })
         Divider()
         Button {
             reTranscribe(ids: targets)
@@ -394,15 +395,22 @@ struct ContentView: View {
         }
     }
 
+    /// Whether this entry can be tidied — nothing of the user's own to lose.
+    private func canTidy(_ id: UUID) -> Bool {
+        library.entries.first { $0.id == id }.map { !$0.transcriptEdited } ?? false
+    }
+
     /// Rewrites the selected transcripts into readable paragraphs. Runs one at a
     /// time — a tidy-up is a whole-transcript rewrite, and firing a batch of them at
     /// one local model at once only makes them all slower.
     private func tidy(ids: [UUID]) {
         Task {
             for id in ids {
-                guard let entry = library.entries.first(where: { $0.id == id }) else { continue }
-                let source = entry.transcriptEdited ? entry.prose : entry.rawProse
-                guard let tidied = await ollama.tidy(source, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) else { continue }
+                // Hand-edited transcripts are left alone: the rewrite would replace
+                // the user's own wording with a paraphrase of it, and only Whisper's
+                // words are recoverable afterwards.
+                guard let entry = library.entries.first(where: { $0.id == id }), !entry.transcriptEdited else { continue }
+                guard let tidied = await ollama.tidy(entry.rawProse, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) else { continue }
 
                 // Re-read: a rewrite takes a while, and the entry may have been edited
                 // or re-transcribed meanwhile. Either way the tidy is of stale words —

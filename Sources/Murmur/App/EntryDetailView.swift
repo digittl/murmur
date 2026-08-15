@@ -36,6 +36,11 @@ struct EntryDetailView: View {
     private var stored: Entry? { library.entries.first { $0.id == entry.id } }
     private var isReTranscribing: Bool { importer.isReTranscribing(entry.id) }
 
+    /// A tidy-up rewrites the transcript in place, so it's offered only where there's
+    /// nothing of the user's own to lose — the model has to be up, and the transcript
+    /// must not carry a manual edit.
+    private var canTidy: Bool { ollama.serverState == .ready && !draft.transcriptEdited }
+
     private var proseBinding: Binding<String> {
         Binding(
             get: { draft.prose },
@@ -192,6 +197,8 @@ struct EntryDetailView: View {
                 Button { regenerate(.tidy) } label: {
                     Label(draft.hasTidy ? "Tidy up again" : "Tidy up transcript", systemImage: "text.append")
                 }
+                .disabled(!canTidy)
+                .help(draft.transcriptEdited ? "You've edited this transcript — tidying would replace your own wording." : "Rewrite the transcript into readable paragraphs")
                 Divider()
                 Button { importer.reTranscribe(draft) } label: { Label("Re-transcribe", systemImage: "waveform.badge.magnifyingglass") }
                     .disabled(isReTranscribing)
@@ -245,15 +252,16 @@ struct EntryDetailView: View {
                     draft.summary = summary
                 }
             case .tidy:
-                // Tidy the words as heard, unless the user has corrected them by
-                // hand — their edit is the better source, and re-tidying an already
-                // tidied transcript just compounds the model's liberties.
-                let source = draft.transcriptEdited ? draft.prose : draft.rawProse
-                let before = draft.text
-                if let tidied = await ollama.tidy(source, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) {
-                    // The field stays live while the model works; if they typed into it
-                    // meanwhile, their words win over a rewrite of the older ones.
-                    if draft.text == before {
+                // Always rewrite the words as heard: re-tidying an already tidied
+                // transcript compounds the model's liberties, and a hand-edited one
+                // isn't offered here at all (see `canTidy`) because taking the tidy
+                // over would replace the user's own writing with a paraphrase of it.
+                let before = draft
+                if let tidied = await ollama.tidy(draft.rawProse, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) {
+                    // The transcript stays live while the model works, and a
+                    // re-transcribe can land too. Either way the rewrite is of words
+                    // that are no longer on screen, so drop it rather than clobber.
+                    if draft.text == before.text, draft.segments == before.segments {
                         draft.tidied = tidied
                         draft.text = nil
                         draft.transcriptEdited = false

@@ -158,6 +158,10 @@ final class Importer: ObservableObject {
         }
         worker?.cancel()
         for i in items.indices where !items[i].state.isFinished {
+            // Record the id as well as the state: the post-transcribe steps (tidy,
+            // summarize) check `cancelledIDs` to bail out, and without this a file
+            // cancelled mid-tidy would still be captioned and saved.
+            cancelledIDs.insert(items[i].id)
             items[i].state = .cancelled
         }
         runState = .idle
