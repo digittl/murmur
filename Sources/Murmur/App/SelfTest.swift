@@ -1,7 +1,7 @@
 import Foundation
 
 /// Headless smoke test of the full pipeline (queue → dedupe → transcribe →
-/// Ollama summarize → persist), run via `Murmur --selftest <folder>`. Uses the
+/// Ollama tidy-up → summarize → persist), run via `Murmur --selftest <folder>`. Uses the
 /// fast `tiny` Whisper model and a throwaway storage root so it never touches the
 /// real iCloud library. Not part of the shipping UI; kept for dev/CI verification.
 enum SelfTest {
@@ -34,7 +34,11 @@ enum SelfTest {
             }
             print("active model: \(ollama.activeTag) (installed: \(ollama.isInstalled(ollama.activeTag)))")
 
-            let importer = Importer(library: library, transcriber: transcriber, ollama: ollama, settings: AppSettings())
+            let settings = AppSettings()
+            // In MURMUR_SELFTEST_ROOT mode the library is reused, so only entries this
+            // run imports can be held to the pipeline's assertions.
+            let preexisting = Set(library.entries.map(\.id))
+            let importer = Importer(library: library, transcriber: transcriber, ollama: ollama, settings: settings)
             print("enqueueing \(folder) with whisper=\(transcriber.selectedVariant)…")
             importer.enqueue(urls: [URL(fileURLWithPath: folder)])
             await waitForQueue(importer)
@@ -44,6 +48,19 @@ enum SelfTest {
                 print("• [\(entry.date.formatted(date: .abbreviated, time: .shortened))] \"\(entry.title)\"")
                 print("  summary: \(entry.summary)")
                 print("  \(entry.segments.count) segments, \(String(format: "%.1fs", entry.duration))")
+                print("  tidied: \(entry.hasTidy ? entry.prose : "— (raw)")")
+            }
+
+            // Tidy-up: with a caption model available every new entry should carry a
+            // rewrite, and the raw words must still be intact behind it. Without
+            // Ollama the tidy is skipped by design, so it can't be a failure.
+            var tidyOK = true
+            let imported = library.entries.filter { !preexisting.contains($0.id) }
+            if ollama.serverState == .ready, ollama.isInstalled(ollama.activeTag), settings.tidyOnImport, !imported.isEmpty {
+                let tidied = imported.filter(\.hasTidy).count
+                let rawIntact = imported.allSatisfy { !$0.rawProse.isEmpty }
+                tidyOK = tidied == imported.count && rawIntact
+                print("\ntidy-up: \(tidied)/\(imported.count) rewritten, raw kept — \(tidyOK ? "PASS" : "FAIL")")
             }
 
             // Dedupe: clear finished, re-enqueue the same folder — all should skip
@@ -84,7 +101,7 @@ enum SelfTest {
                 try? FileManager.default.removeItem(at: temp)
             }
             print("\n== done ==")
-            exit(before == after && skipped > 0 && reopened.entries.count == after && after > 0 && softDeleteOK ? 0 : 1)
+            exit(before == after && skipped > 0 && reopened.entries.count == after && after > 0 && softDeleteOK && tidyOK ? 0 : 1)
         }
 
         RunLoop.main.run()
@@ -102,7 +119,10 @@ enum SelfTest {
         }
         // …then for it to drain. Skipped items are removed, so "done" is simply:
         // idle with nothing left unfinished (an empty queue counts as done).
-        for _ in 0..<1200 {   // up to ~120s
+        // Long enough to outlast the slowest single step — a tidy-up chunk can sit on
+        // its 180s HTTP timeout — so a stall is reported as a stall, not as whatever
+        // the later assertions happen to see mid-drain.
+        for _ in 0..<6000 {   // up to ~600s
             if importer.runState == .idle, importer.items.allSatisfy({ $0.state.isFinished }) {
                 return
             }

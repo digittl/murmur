@@ -20,7 +20,7 @@ struct EntryDetailView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var regenerating: Field?
 
-    private enum Field { case title, summary }
+    private enum Field { case title, summary, tidy }
 
     init(entry: Entry) {
         self.entry = entry
@@ -35,6 +35,11 @@ struct EntryDetailView: View {
     /// fresh transcript, title and summary we then pull into the draft.
     private var stored: Entry? { library.entries.first { $0.id == entry.id } }
     private var isReTranscribing: Bool { importer.isReTranscribing(entry.id) }
+
+    /// A tidy-up rewrites the transcript in place, so it's offered only where there's
+    /// nothing of the user's own to lose — the model has to be up, and the transcript
+    /// must not carry a manual edit.
+    private var canTidy: Bool { ollama.serverState == .ready && !draft.transcriptEdited }
 
     private var proseBinding: Binding<String> {
         Binding(
@@ -160,9 +165,15 @@ struct EntryDetailView: View {
                     .foregroundStyle(.secondary)
                 if draft.transcriptEdited {
                     Text("· edited").font(.caption).foregroundStyle(.tertiary)
+                } else if draft.hasTidy {
+                    Text("· tidied").font(.caption).foregroundStyle(.tertiary)
                 }
                 if isReTranscribing {
                     Text("· re-transcribing…").font(.caption).foregroundStyle(.tertiary)
+                    ProgressView().controlSize(.small)
+                }
+                if regenerating == .tidy {
+                    Text("· tidying up…").font(.caption).foregroundStyle(.tertiary)
                     ProgressView().controlSize(.small)
                 }
             }
@@ -183,6 +194,11 @@ struct EntryDetailView: View {
             Menu {
                 Button { regenerate(.title) } label: { Label("Regenerate title", systemImage: "textformat") }
                 Button { regenerate(.summary) } label: { Label("Regenerate summary", systemImage: "text.alignleft") }
+                Button { regenerate(.tidy) } label: {
+                    Label(draft.hasTidy ? "Tidy up again" : "Tidy up transcript", systemImage: "text.append")
+                }
+                .disabled(!canTidy)
+                .help(draft.transcriptEdited ? "You've edited this transcript — tidying would replace your own wording." : "Rewrite the transcript into readable paragraphs")
                 Divider()
                 Button { importer.reTranscribe(draft) } label: { Label("Re-transcribe", systemImage: "waveform.badge.magnifyingglass") }
                     .disabled(isReTranscribing)
@@ -234,6 +250,22 @@ struct EntryDetailView: View {
             case .summary:
                 if let summary = await ollama.regenerateSummary(from: draft.prose, prompt: settings.effectiveSummaryPrompt, persona: settings.authorPersona) {
                     draft.summary = summary
+                }
+            case .tidy:
+                // Always rewrite the words as heard: re-tidying an already tidied
+                // transcript compounds the model's liberties, and a hand-edited one
+                // isn't offered here at all (see `canTidy`) because taking the tidy
+                // over would replace the user's own writing with a paraphrase of it.
+                let before = draft
+                if let tidied = await ollama.tidy(draft.rawProse, prompt: settings.effectiveTidyPrompt, persona: settings.authorPersona) {
+                    // The transcript stays live while the model works, and a
+                    // re-transcribe can land too. Either way the rewrite is of words
+                    // that are no longer on screen, so drop it rather than clobber.
+                    if draft.text == before.text, draft.segments == before.segments {
+                        draft.tidied = tidied
+                        draft.text = nil
+                        draft.transcriptEdited = false
+                    }
                 }
             }
             library.upsert(draft)

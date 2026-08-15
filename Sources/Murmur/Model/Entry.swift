@@ -22,21 +22,31 @@ struct Entry: Codable, Identifiable, Hashable {
     var title: String
     var summary: String
     var segments: [Segment]
-    var text: String?           // user-edited transcript prose; overrides segments for display
+    var text: String?           // user-edited transcript prose; overrides everything for display
+    var tidied: String?         // AI-rewritten transcript (punctuated, paragraphed); overrides segments
     var transcriptEdited: Bool
     var summaryEdited: Bool
     var createdAt: Date
     var model: String
     var language: String?
 
-    /// The transcript as flowing prose — the user's edit if present, else the
-    /// segments joined into sentences.
+    /// The transcript as flowing prose, most-edited version first: the user's own
+    /// edit, else the AI tidy-up, else the raw segments joined into sentences.
     var prose: String {
         if let text, !text.isEmpty {
             return text
         }
+        if let tidied, !tidied.isEmpty {
+            return tidied
+        }
         return Self.joinSegments(segments)
     }
+
+    /// What Whisper actually heard, untouched. Always available — tidying and
+    /// editing both leave `segments` alone — so the raw words are never lost.
+    var rawProse: String { Self.joinSegments(segments) }
+
+    var hasTidy: Bool { !(tidied ?? "").isEmpty }
 
     var plainText: String { prose }
 

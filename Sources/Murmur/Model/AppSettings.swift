@@ -99,6 +99,19 @@ final class AppSettings: ObservableObject {
     @Published var customSummaryPrompt: String {
         didSet { UserDefaults.standard.set(customSummaryPrompt, forKey: "MurmurCustomSummaryPrompt") }
     }
+    @Published var customTidyEnabled: Bool {
+        didSet { UserDefaults.standard.set(customTidyEnabled, forKey: "MurmurCustomTidyEnabled") }
+    }
+    @Published var customTidyPrompt: String {
+        didSet { UserDefaults.standard.set(customTidyPrompt, forKey: "MurmurCustomTidyPrompt") }
+    }
+
+    /// Whether a new import is rewritten into readable paragraphs automatically.
+    /// On by default — the raw transcript stays in `Entry.segments` either way, so
+    /// this only decides what the entry opens on.
+    @Published var tidyOnImport: Bool {
+        didSet { UserDefaults.standard.set(tidyOnImport, forKey: "MurmurTidyOnImport") }
+    }
 
     init() {
         let defaults = UserDefaults.standard
@@ -109,6 +122,10 @@ final class AppSettings: ObservableObject {
         customTitlePrompt = defaults.string(forKey: "MurmurCustomTitlePrompt") ?? ""
         customSummaryEnabled = defaults.bool(forKey: "MurmurCustomSummaryEnabled")
         customSummaryPrompt = defaults.string(forKey: "MurmurCustomSummaryPrompt") ?? ""
+        customTidyEnabled = defaults.bool(forKey: "MurmurCustomTidyEnabled")
+        customTidyPrompt = defaults.string(forKey: "MurmurCustomTidyPrompt") ?? ""
+        // Defaults to on, so an unset key reads as true rather than bool()'s false.
+        tidyOnImport = defaults.object(forKey: "MurmurTidyOnImport") as? Bool ?? true
     }
 
     /// The custom title guidance to use, or nil to fall back to the default.
@@ -119,6 +136,10 @@ final class AppSettings: ObservableObject {
     var effectiveSummaryPrompt: String? {
         let trimmed = customSummaryPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         return customSummaryEnabled && !trimmed.isEmpty ? trimmed : nil
+    }
+    var effectiveTidyPrompt: String? {
+        let trimmed = customTidyPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return customTidyEnabled && !trimmed.isEmpty ? trimmed : nil
     }
 
     /// The author's name with surrounding whitespace stripped, or nil if blank.

@@ -504,7 +504,10 @@ struct ChatView: View {
             return []
         }
         return library.entries.compactMap { entry -> (Entry, Int)? in
-            let hay = "\(entry.title) \(entry.summary) \(entry.prose)".lowercased()
+            // Search the words as heard as well as the tidied prose: a tidy-up drops
+            // filler and repairs mishearings, and the entry should still be findable
+            // by whatever the user remembers saying.
+            let hay = "\(entry.title) \(entry.summary) \(entry.prose) \(entry.hasTidy ? entry.rawProse : "")".lowercased()
             let score = terms.reduce(0) { $0 + (hay.contains($1) ? 1 : 0) }
             return score > 0 ? (entry, score) : nil
         }

@@ -253,6 +253,7 @@ private struct QueueRow: View {
         switch item.state {
         case .pending: return "Waiting…"
         case .transcribing: return redo ? "Re-transcribing…" : "Transcribing…"
+        case .tidying: return "Tidying up…"
         case .summarizing: return "Summarizing…"
         case .done: return redo ? "Re-transcribed" : "Added"
         case .skipped: return "Duplicate — skipped"
@@ -268,6 +269,8 @@ private struct QueueRow: View {
             Image(systemName: "clock").foregroundStyle(.secondary)
         case .transcribing:
             Image(systemName: "waveform").foregroundStyle(.tint).symbolEffect(.variableColor.iterative, isActive: true)
+        case .tidying:
+            Image(systemName: "text.alignleft").foregroundStyle(.tint)
         case .summarizing:
             Image(systemName: "sparkles").foregroundStyle(.tint)
         case .done:
