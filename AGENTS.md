@@ -30,7 +30,7 @@ No CI. A release is built locally and its zip attached to a GitHub Release; the 
 2. `zsh build.sh`
 3. `ditto -c -k --keepParent dist/Murmur.app Murmur.app.zip`
 4. Commit source (not the zip — it's untracked), push to `main`.
-5. `gh release create vX.Y.Z --target main --title "Murmur X.Y.Z" --notes "..." Murmur.app.zip`
+5. `gh release create X.Y.Z --target main --title "Murmur X.Y.Z" --notes "..." Murmur.app.zip` (no `v` prefix on the tag)
 
 Feature → minor bump, fixes → patch. The release must carry the `Murmur.app.zip` asset or auto-update breaks.
 
